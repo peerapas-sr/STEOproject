@@ -50,14 +50,19 @@ void bsp_gpio_init(void)
                       (1UL << (KEY3_MI_PIN * 2U)) |
                       (1UL << (KEY4_SOL_PIN * 2U)));
 
-    /* 5. Configure External Interrupt (EXTI) Line 10 on PA10 [ปุ่มซ้ายสุด] */
+    /* 5. Configure HW-504 Joystick Center Switch: PC2 (Pull-up) */
+    GPIOC->MODER &= ~(3UL << (JOY_SW_PIN * 2U));
+    GPIOC->PUPDR &= ~(3UL << (JOY_SW_PIN * 2U));
+    GPIOC->PUPDR |=  (1UL << (JOY_SW_PIN * 2U));
+
+    /* 6. Configure External Interrupt (EXTI) Line 10 on PA10 [ปุ่มซ้ายสุด] */
     SYSCFG->EXTICR[2] &= ~(0x0FUL << (2U * 4U)); /* 0x0 = Port A on Line 10 */
 
     EXTI->IMR  |= EXTI_LINE_10_MASK;              /* Unmask Line 10 */
     EXTI->FTSR |= EXTI_LINE_10_MASK;              /* Falling Edge Trigger (Active Low press) */
     EXTI->RTSR &= ~EXTI_LINE_10_MASK;
 
-    /* 6. Enable EXTI15_10 Interrupt in NVIC */
+    /* 7. Enable EXTI15_10 Interrupt in NVIC */
     NVIC_SetPriority(EXTI15_10_IRQn, EXTI10_NVIC_PRIORITY);
     NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
@@ -81,6 +86,11 @@ bool bsp_gpio_read_key3_mi(void)
 bool bsp_gpio_read_key4_sol(void)
 {
     return ((GPIOB->IDR & (1UL << KEY4_SOL_PIN)) == 0U);
+}
+
+bool bsp_gpio_read_joystick_switch(void)
+{
+    return ((GPIOC->IDR & (1UL << JOY_SW_PIN)) == 0U);
 }
 
 /* Red LED Setter */

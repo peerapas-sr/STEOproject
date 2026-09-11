@@ -17,6 +17,9 @@
 #define SEC_TO_MS_FACTOR        (1000U)
 #define CHUNK_MS_DURATION       (5U)
 #define ADC_MAX_VAL             (4095U)
+#define BUZZER_FREQ_MIN_HZ      (50U)
+#define BUZZER_FREQ_MAX_HZ      (5000U)
+#define BUZZER_CYCLES_MAX       (50U)
 #define DELAY_US_CALIB_COUNT    (1U)
 #define DELAY_MS_CALIB_COUNT    (2000U)
 
@@ -72,7 +75,7 @@ void bsp_buzzer_off(void)
 /* Synthesizes sound waves for ~5 milliseconds with cubic perceptual curve volume */
 void bsp_buzzer_play_chunk(uint32_t freq_hz, uint16_t vol_adc)
 {
-    if ((freq_hz == 0U) || (vol_adc < BUZZER_VOL_MIN_THRESH))
+    if ((freq_hz < BUZZER_FREQ_MIN_HZ) || (freq_hz > BUZZER_FREQ_MAX_HZ) || (vol_adc < BUZZER_VOL_MIN_THRESH))
     {
         bsp_buzzer_off();
         bsp_delay_us(CHUNK_SILENCE_US);
@@ -81,6 +84,14 @@ void bsp_buzzer_play_chunk(uint32_t freq_hz, uint16_t vol_adc)
     {
         uint32_t u4t_period_us = SEC_TO_US_FACTOR / freq_hz;
         uint32_t u4t_max_high = u4t_period_us / 2U; /* 50% Duty cycle = Max Volume */
+        if (u4t_max_high == 0U)
+        {
+            u4t_max_high = 1U;
+        }
+        else
+        {
+            /* Period is valid */
+        }
 
         /* Cubic perceptual curve: (vol_adc / 4095)^3 to match human hearing & piezo physics */
         uint32_t u4t_v = (uint32_t)vol_adc;
@@ -92,16 +103,33 @@ void bsp_buzzer_play_chunk(uint32_t freq_hz, uint16_t vol_adc)
         {
             u4t_high = 1U; /* Minimum audible impulse */
         }
+        else if (u4t_high >= u4t_period_us)
+        {
+            u4t_high = u4t_max_high;
+        }
         else
         {
             /* Value within valid bounds */
         }
+
         uint32_t u4t_low = u4t_period_us - u4t_high;
+        if (u4t_low == 0U)
+        {
+            u4t_low = 1U;
+        }
+        else
+        {
+            /* Valid low duration */
+        }
 
         uint32_t u4t_cycles = (freq_hz * CHUNK_MS_DURATION) / SEC_TO_MS_FACTOR;
         if (u4t_cycles == 0U)
         {
             u4t_cycles = 1U;
+        }
+        else if (u4t_cycles > BUZZER_CYCLES_MAX)
+        {
+            u4t_cycles = BUZZER_CYCLES_MAX;
         }
         else
         {

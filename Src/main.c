@@ -5,9 +5,9 @@
  * Standard    : Toyota Embedded MISRA-C Compliant (22 Rules)
  *
  * Requirements Satisfied:
- *   [1] GPIO                  : 4 Keys In (PA10, PB3, PB5, PB4), Red LED (PA6), PC13 Button
+ *   [1] GPIO                  : 4 Keys In (PA10, PB3, PB5, PB4), HW-504 SW (PC2), Red LED (PA6)
  *   [2] UART (Interrupt/DMA)  : USART2 115200 bps via RX Interrupt (NO Polling)
- *   [3] ADC (Interrupt/DMA)   : Single-channel ADC1 via EOC Interrupt (PA4)
+ *   [3] ADC (Interrupt/DMA)   : 3-Channel ADC1 via EOC Interrupt (PA4 Vol, PC0 Vx, PC1 Vy)
  *   [4] External Interrupt    : EXTI Line 10 on PA10 [Key 1]
  *   [5] Additional Peripheral : TIM3 Hardware Timer 1ms Periodic Interrupt
  *   [6] MISRA-C Compliance    : 22 Toyota Rules fully enforced
@@ -22,24 +22,41 @@
 #include "bsp_adc.h"
 #include "bsp_uart.h"
 #include "bsp_buzzer.h"
+#include "bsp_joystick.h"
 #include "bsp_timer.h"
 #include "app_synth.h"
+#include "test_joystick.h"
+
+/* Mode Selection: Set to 1 to test HW-504 Joystick, 0 for Normal Synthesizer */
+#define TEST_JOYSTICK_MODE      (0)
 
 /* System Clock definition required by CMSIS */
 uint32_t SystemCoreClock = 16000000U;
 
 int main(void)
 {
-    /* 1. Initialize Board Support Package (Drivers) */
-    bsp_gpio_init();   /* 4 Keys, User Button PC13 & EXTI10 on PA10 */
-    bsp_buzzer_init(); /* Buzzer on PC3 */
-    bsp_adc_init();    /* Single-channel ADC1 with EOC interrupt */
-    bsp_uart_init();   /* USART2 with RXNE Interrupt (No Polling) */
-    bsp_timer_init();  /* TIM3 1ms Hardware Timer Interrupt */
+    /* 0. Enable Cortex-M4 Hardware FPU Coprocessors CP10 & CP11 (Full Access) */
+    SCB->CPACR |= ((3UL << (10U * 2U)) | (3UL << (11U * 2U)));
+    __DSB();
+    __ISB();
 
-    /* 2. Initialize and Run Application Layer */
+    /* 1. Initialize Board Support Package (Drivers) */
+    bsp_gpio_init();     /* 4 Keys, HW-504 SW (PC2) & EXTI10 on PA10 */
+    bsp_buzzer_init();   /* Buzzer on PC3 */
+    bsp_adc_init();      /* 3-Channel ADC1 (PA4 Vol, PC0 Vx, PC1 Vy) with EOC interrupt */
+    bsp_joystick_init(); /* HW-504 Dual-Axis Joystick Driver */
+    bsp_uart_init();     /* USART2 with RXNE Interrupt (No Polling) */
+    bsp_timer_init();    /* TIM3 1ms Hardware Timer Interrupt */
+
+#if (TEST_JOYSTICK_MODE != 0)
+    /* 2. Run Standalone HW-504 Joystick Diagnostic Utility */
+    test_joystick_init();
+    test_joystick_run();
+#else
+    /* 2. Initialize and Run Main Synthesizer Application Layer */
     app_synth_init();
     app_synth_run();
+#endif
 
     /* Should never reach here */
     while (1)

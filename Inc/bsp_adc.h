@@ -10,8 +10,11 @@
 #define BSP_ADC_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 void bsp_adc_init(void);
+void bsp_adc_service(uint32_t now_ms);
 uint8_t bsp_adc_get_volume_percent(void);
+bool bsp_adc_get_joystick_raw(uint16_t *p_x_raw, uint16_t *p_y_raw);
 
 #endif /* BSP_ADC_H */
