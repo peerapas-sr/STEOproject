@@ -24,6 +24,7 @@
 #define SYNTH_NOTE_INDEX_SOL        (3)
 
 #define UART_NOTE_PLAY_MS           (250U)
+#define UART_NOTE_TICK_MS           (5U)
 #define CHIME_NOTE_C5_FREQ          (523U)
 #define CHIME_NOTE_E5_FREQ          (659U)
 #define CHIME_NOTE_G5_FREQ          (784U)
@@ -34,6 +35,7 @@
 #define CHIME_DELAY_SHORT_MS        (50U)
 #define CHIME_DELAY_LONG_MS         (100U)
 #define CHIRP_DELAY_MS              (40U)
+#define STATUS_TONE_NONE_FREQ       (0U)
 
 #define BTN_DEBOUNCE_MS             (25U)
 #define BTN_LONG_PRESS_MS           (800U)
@@ -41,14 +43,16 @@
 #define REC_LED_BLINK_PERIOD_MS     (200U)
 
 #define PLAYBACK_MIN_GAP_MS         (40U)
-#define PLAYBACK_DEF_VOL_RAW        (2500U)
-#define FREQ_MIN_AUDIBLE_HZ         (50)
 #define MIN_NOTE_DUR_RECORD_MS      (50U)
 #define MIN_NOTE_DUR_RELEASE_MS     (60U)
 #define MAX_REST_GAP_RECORD_MS      (3000U)
 #define DEF_REST_GAP_MS             (80U)
 #define TRANSITION_REST_MS          (30U)
 #define FINAL_NOTE_REST_MS          (100U)
+#define VOLUME_RAW_MAX              (4095U)
+#define PERCENT_SCALE               (100U)
+#define VOLUME_REPORT_PERIOD_MS     (200U)
+#define VOLUME_REPORT_DELTA_PCT     (5)
 
 /* Octave Definitions */
 typedef enum {
@@ -72,19 +76,12 @@ typedef struct {
     uint16_t rest_ms;      /* Gap between this note and next note */
 } synth_step_t;
 
-/* Function Prototypes with named parameters (Rule 11) */
-static void synth_uart_send_dec(uint32_t val);
-static void synth_print_help(void);
-static void synth_seq_list(void);
-static void synth_seq_start_record(void);
-static void synth_seq_stop_record(void);
-static void synth_seq_toggle_record(void);
-static void synth_seq_start_playback(void);
-static void synth_seq_stop_playback(void);
-static void synth_seq_toggle_playback(void);
-static void synth_chirp_rec_start(void);
-static void synth_chirp_rec_stop(void);
-static void synth_chirp_play_start(void);
+typedef struct {
+    bool b_k1;
+    bool b_k2;
+    bool b_k3;
+    bool b_k4;
+} synth_keys_t;
 
 /* Frequency Table for 4 Notes across 3 Octaves */
 static const uint32_t NOTE_FREQ[SYNTH_NUM_OCTAVES][SYNTH_NUM_NOTES] = {
@@ -98,6 +95,13 @@ static const char *NOTE_NAMES[SYNTH_NUM_NOTES] = {
     "D (RE)",
     "E (MI)",
     "G (SOL)"
+};
+
+static const char *UART_NOTE_MESSAGES[SYNTH_NUM_NOTES] = {
+    "[UART CMD] Note 1: C (DO)\r\n",
+    "[UART CMD] Note 2: D (RE)\r\n",
+    "[UART CMD] Note 3: E (MI)\r\n",
+    "[UART CMD] Note 4: G (SOL)\r\n"
 };
 
 /* Current Synthesizer Live States (Hungarian prefix) */
@@ -127,40 +131,28 @@ static uint16_t         g_u2t_play_current_step = 0U;
 static uint32_t         g_u4t_play_step_start_ms = 0U;
 static bool             g_b_play_in_note_phase = false;
 
-/* Blue User Button (PC13) Press & Hold Tracker */
-static bool             g_b_btn_user_held = false;
-static uint32_t         g_u4t_btn_press_start_ms = 0U;
-static bool             g_b_btn_long_action_taken = false;
+/* Breadboard Combo Trackers (Directly on 4 buttons):
+ * - Key 1 + Key 4 (Outer buttons): Toggle Record
+ * - Key 2 + Key 3 (Inner buttons): Toggle Playback
+ */
+static uint32_t         g_u4t_combo_rec_start_ms = 0U;
+static bool             g_b_combo_rec_action_taken = false;
+static uint32_t         g_u4t_combo_play_start_ms = 0U;
+static bool             g_b_combo_play_action_taken = false;
 
-/* Breadboard Combo Tracker (Key 1 + Key 4) */
-static uint32_t         g_u4t_combo_start_ms = 0U;
-static bool             g_b_combo_action_taken = false;
-
-/* Audio Cue: Record Started (Ascending chirp) */
-static void synth_chirp_rec_start(void)
+static void synth_play_status_tone(uint32_t u4t_first_freq, uint32_t u4t_second_freq)
 {
-    bsp_buzzer_play_chunk(CHIME_NOTE_C6_FREQ, CHIME_NOTE_VOL_RAW);
+    bsp_buzzer_play_chunk(u4t_first_freq, CHIME_NOTE_VOL_RAW);
     bsp_delay_ms(CHIRP_DELAY_MS);
-    bsp_buzzer_play_chunk(CHIME_NOTE_G6_FREQ, CHIME_NOTE_VOL_RAW);
-    bsp_delay_ms(CHIRP_DELAY_MS);
-    bsp_buzzer_off();
-}
-
-/* Audio Cue: Record Stopped (Descending chirp) */
-static void synth_chirp_rec_stop(void)
-{
-    bsp_buzzer_play_chunk(CHIME_NOTE_G6_FREQ, CHIME_NOTE_VOL_RAW);
-    bsp_delay_ms(CHIRP_DELAY_MS);
-    bsp_buzzer_play_chunk(CHIME_NOTE_C6_FREQ, CHIME_NOTE_VOL_RAW);
-    bsp_delay_ms(CHIRP_DELAY_MS);
-    bsp_buzzer_off();
-}
-
-/* Audio Cue: Playback Started (Chime) */
-static void synth_chirp_play_start(void)
-{
-    bsp_buzzer_play_chunk(CHIME_NOTE_E5_FREQ, CHIME_NOTE_VOL_RAW);
-    bsp_delay_ms(CHIRP_DELAY_MS);
+    if (u4t_second_freq != STATUS_TONE_NONE_FREQ)
+    {
+        bsp_buzzer_play_chunk(u4t_second_freq, CHIME_NOTE_VOL_RAW);
+        bsp_delay_ms(CHIRP_DELAY_MS);
+    }
+    else
+    {
+        /* Single-note status tone */
+    }
     bsp_buzzer_off();
 }
 
@@ -185,10 +177,7 @@ static void synth_uart_send_dec(uint32_t val)
         }
         for (int32_t s4t_i = s4t_idx - 1; s4t_i >= 0; s4t_i--)
         {
-            char c[2];
-            c[0] = buf[s4t_i];
-            c[1] = '\0';
-            bsp_uart_send_string(c);
+            bsp_uart_send_char(buf[s4t_i]);
         }
     }
 }
@@ -200,11 +189,12 @@ static void synth_print_help(void)
     bsp_uart_send_string("  STM32 Synthesizer with On-Board Sequence Recorder\r\n");
     bsp_uart_send_string("  Toyota MISRA-C Compliant | Zero-Polling\r\n");
     bsp_uart_send_string("===================================================\r\n");
-    bsp_uart_send_string("[HARDWARE CONTROLS (DIRECTLY ON BOARD)]:\r\n");
+    bsp_uart_send_string("[HARDWARE CONTROLS (DIRECTLY ON BREADBOARD)]:\r\n");
     bsp_uart_send_string("  - Key 1-4    : C (PA10), D (PB3), E (PB5), G (PB4)\r\n");
-    bsp_uart_send_string("  - Blue Button (Hold >0.8s) : START / STOP RECORDING!\r\n");
-    bsp_uart_send_string("  - Blue Button (Short Click): PLAY / STOP PLAYBACK!\r\n");
-    bsp_uart_send_string("  - Potentiometer : Volume Control (PA4)\r\n");
+    bsp_uart_send_string("  - Key 1 + Key 4 (Hold 0.6s) : START / STOP RECORDING!\r\n");
+    bsp_uart_send_string("  - Key 2 + Key 3 (Hold 0.6s) : PLAY / STOP PLAYBACK!\r\n");
+    bsp_uart_send_string("  - Press Any Key while Playing: STOP PLAYBACK!\r\n");
+    bsp_uart_send_string("  - Potentiometer (PA4)       : Volume Control (0-100%)\r\n");
     bsp_uart_send_string("[UART COMMANDS (OPTIONAL)] (115200 bps):\r\n");
     bsp_uart_send_string("  - '1' - '4'  : Play note directly\r\n");
     bsp_uart_send_string("  - 'r' / 'R'  : Toggle Record (Start / Stop)\r\n");
@@ -221,7 +211,7 @@ static void synth_seq_list(void)
     bsp_uart_send_string("\r\n--- Recorded Sequence List ---\r\n");
     if (g_u2t_seq_count == 0U)
     {
-        bsp_uart_send_string("[EMPTY] No notes recorded. Hold Blue Button to start recording!\r\n");
+        bsp_uart_send_string("[EMPTY] No notes recorded. Hold Key 1 + Key 4 to start recording!\r\n");
     }
     else
     {
@@ -263,9 +253,39 @@ static void synth_seq_start_record(void)
     g_u4t_rec_blink_timer_ms = bsp_timer_get_ms();
     g_b_rec_blink_led_state = true;
 
-    synth_chirp_rec_start(); /* Audible confirmation on board */
+    synth_play_status_tone(CHIME_NOTE_C6_FREQ, CHIME_NOTE_G6_FREQ);
     bsp_uart_send_string("\r\n[RECORDER] >>> RECORDING STARTED! Play notes on Key 1-4 <<<\r\n");
     bsp_uart_send_string("[RECORDER] Click Blue Button when finished to save.\r\n");
+}
+
+static uint32_t synth_seq_append_note(uint32_t u4t_now, uint32_t u4t_min_duration,
+                                      uint16_t u2t_rest_ms)
+{
+    uint32_t u4t_duration = 0U;
+
+    if (g_u2t_seq_count < SYNTH_MAX_SEQUENCE_STEPS)
+    {
+        u4t_duration = u4t_now - g_u4t_rec_note_start_ms;
+        if (u4t_duration < u4t_min_duration)
+        {
+            u4t_duration = u4t_min_duration;
+        }
+        else
+        {
+            /* Duration is sufficient */
+        }
+        g_sequence[g_u2t_seq_count].note_index = g_s1t_rec_current_note;
+        g_sequence[g_u2t_seq_count].octave = g_u1t_rec_current_octave;
+        g_sequence[g_u2t_seq_count].duration_ms = (uint16_t)u4t_duration;
+        g_sequence[g_u2t_seq_count].rest_ms = u2t_rest_ms;
+        g_u2t_seq_count++;
+    }
+    else
+    {
+        /* Sequence memory is full */
+    }
+
+    return u4t_duration;
 }
 
 /* Stop Recording (On-Board) */
@@ -274,20 +294,7 @@ static void synth_seq_stop_record(void)
     if ((g_b_rec_is_note_active == true) && (g_u2t_seq_count < SYNTH_MAX_SEQUENCE_STEPS))
     {
         uint32_t u4t_now = bsp_timer_get_ms();
-        uint32_t u4t_dur = u4t_now - g_u4t_rec_note_start_ms;
-        if (u4t_dur < MIN_NOTE_DUR_RELEASE_MS)
-        {
-            u4t_dur = MIN_NOTE_DUR_RELEASE_MS;
-        }
-        else
-        {
-            /* Duration is sufficient */
-        }
-        g_sequence[g_u2t_seq_count].note_index = g_s1t_rec_current_note;
-        g_sequence[g_u2t_seq_count].octave = g_u1t_rec_current_octave;
-        g_sequence[g_u2t_seq_count].duration_ms = (uint16_t)u4t_dur;
-        g_sequence[g_u2t_seq_count].rest_ms = FINAL_NOTE_REST_MS;
-        g_u2t_seq_count++;
+        (void)synth_seq_append_note(u4t_now, MIN_NOTE_DUR_RELEASE_MS, FINAL_NOTE_REST_MS);
         g_b_rec_is_note_active = false;
     }
     else
@@ -297,7 +304,7 @@ static void synth_seq_stop_record(void)
     g_recorder_mode = RECORDER_IDLE;
     bsp_gpio_led_red_set(false);
 
-    synth_chirp_rec_stop(); /* Audible confirmation on board */
+    synth_play_status_tone(CHIME_NOTE_G6_FREQ, CHIME_NOTE_C6_FREQ);
     bsp_uart_send_string("\r\n[RECORDER] === RECORDING STOPPED & SAVED ===\r\n");
     bsp_uart_send_string("[RECORDER] Total notes saved: ");
     synth_uart_send_dec((uint32_t)g_u2t_seq_count);
@@ -332,7 +339,7 @@ static void synth_seq_start_playback(void)
 {
     if (g_u2t_seq_count == 0U)
     {
-        bsp_uart_send_string("\r\n[PLAYBACK] Memory is empty! Hold Blue Button to record first.\r\n");
+        bsp_uart_send_string("\r\n[PLAYBACK] Memory is empty! Hold Key 1 + Key 4 to record first.\r\n");
         /* Short low beep to signal empty memory */
         bsp_buzzer_play_chunk(262U, 2000U);
         bsp_delay_ms(80U);
@@ -340,7 +347,7 @@ static void synth_seq_start_playback(void)
     }
     else
     {
-        synth_chirp_play_start();
+        synth_play_status_tone(CHIME_NOTE_E5_FREQ, STATUS_TONE_NONE_FREQ);
         g_recorder_mode = RECORDER_PLAYING;
         g_u2t_play_current_step = 0U;
         g_b_play_in_note_phase = true;
@@ -394,152 +401,81 @@ void app_synth_init(void)
     bsp_delay_ms(CHIME_DELAY_LONG_MS);
 }
 
-void app_synth_run(void)
+static void synth_handle_combo(uint32_t u4t_current_time, const synth_keys_t *p_keys)
 {
-    while (1)
+    /* Combo 1: Key 1 + Key 4 (Outer buttons) held for 0.6s -> Toggle Record */
+    if ((p_keys->b_k1 == true) && (p_keys->b_k4 == true))
     {
-        uint32_t u4t_current_time = bsp_timer_get_ms();
-
-        /* 1. Check EXTI Line 10 Interrupt Event (Key 1 PA10 pressed) */
-        if (bsp_gpio_get_exti_flag())
+        if (g_u4t_combo_rec_start_ms == 0U)
         {
-            bsp_gpio_clear_exti_flag();
-            /* Hardware EXTI10 flag cleared without altering pitch/octave */
+            g_u4t_combo_rec_start_ms = u4t_current_time;
+            g_b_combo_rec_action_taken = false;
         }
         else
         {
-            /* No EXTI event */
-        }
-
-        /* 2. On-Board Blue Button (PC13) Controller:
-         *    - Short Click (< 800ms) : PLAYBACK / STOP PLAYBACK
-         *    - Long Press (Hold > 800ms): START / STOP RECORDING
-         */
-        bool b_btn_user = bsp_gpio_read_btn_user();
-
-        if (b_btn_user == true)
-        {
-            if (g_b_btn_user_held == false)
+            uint32_t u4t_combo_dur = u4t_current_time - g_u4t_combo_rec_start_ms;
+            if ((u4t_combo_dur >= COMBO_HOLD_MS) && (g_b_combo_rec_action_taken == false))
             {
-                /* Button just pressed down */
-                g_b_btn_user_held = true;
-                g_u4t_btn_press_start_ms = u4t_current_time;
-                g_b_btn_long_action_taken = false;
+                g_b_combo_rec_action_taken = true;
+                synth_seq_toggle_record();
             }
             else
             {
-                /* Button is held down -> Check Long Press */
-                uint32_t u4t_hold_time = u4t_current_time - g_u4t_btn_press_start_ms;
-                if ((u4t_hold_time >= BTN_LONG_PRESS_MS) && (g_b_btn_long_action_taken == false))
-                {
-                    /* Long Press Triggered: Toggle Record on the board! */
-                    g_b_btn_long_action_taken = true;
-                    synth_seq_toggle_record();
-                }
-                else
-                {
-                    /* Waiting for threshold or already handled */
-                }
+                /* Holding record combo */
             }
+        }
+    }
+    else
+    {
+        g_u4t_combo_rec_start_ms = 0U;
+        g_b_combo_rec_action_taken = false;
+    }
+
+    /* Combo 2: Key 2 + Key 3 (Inner buttons) held for 0.6s -> Toggle Playback */
+    if ((p_keys->b_k2 == true) && (p_keys->b_k3 == true))
+    {
+        if (g_u4t_combo_play_start_ms == 0U)
+        {
+            g_u4t_combo_play_start_ms = u4t_current_time;
+            g_b_combo_play_action_taken = false;
         }
         else
         {
-            if (g_b_btn_user_held == true)
+            uint32_t u4t_combo_dur = u4t_current_time - g_u4t_combo_play_start_ms;
+            if ((u4t_combo_dur >= COMBO_HOLD_MS) && (g_b_combo_play_action_taken == false))
             {
-                /* Button just released */
-                uint32_t u4t_press_dur = u4t_current_time - g_u4t_btn_press_start_ms;
-                g_b_btn_user_held = false;
-
-                if ((g_b_btn_long_action_taken == false) && (u4t_press_dur >= BTN_DEBOUNCE_MS))
-                {
-                    /* Short Click Triggered */
-                    if (g_recorder_mode == RECORDER_RECORDING)
-                    {
-                        /* If currently recording, a click stops recording and saves */
-                        synth_seq_stop_record();
-                    }
-                    else if (g_recorder_mode == RECORDER_PLAYING)
-                    {
-                        /* If playing, a click stops playback */
-                        synth_seq_stop_playback();
-                    }
-                    else
-                    {
-                        /* If idle, a click starts playback of recorded sequence */
-                        synth_seq_start_playback();
-                    }
-                }
-                else
-                {
-                    /* Button released after long press action */
-                }
+                g_b_combo_play_action_taken = true;
+                synth_seq_toggle_playback();
             }
             else
             {
-                /* Button remains idle */
+                /* Holding playback combo */
             }
         }
+    }
+    else
+    {
+        g_u4t_combo_play_start_ms = 0U;
+        g_b_combo_play_action_taken = false;
+    }
+}
 
-        /* 3. Check Breadboard Keys */
-        bool b_k1 = bsp_gpio_read_key1_do();
-        bool b_k2 = bsp_gpio_read_key2_re();
-        bool b_k3 = bsp_gpio_read_key3_mi();
-        bool b_k4 = bsp_gpio_read_key4_sol();
-
-        /* 3.1 Breadboard Combo: Key 1 + Key 4 held for 0.6s -> Alternate RECORD Toggle */
-        if ((b_k1 == true) && (b_k4 == true))
+static void synth_handle_uart(void)
+{
+    if (bsp_uart_has_rx_char() == true)
+    {
+        char u1t_cmd = bsp_uart_get_rx_char();
+        if ((u1t_cmd >= '1') && (u1t_cmd <= '4'))
         {
-            if (g_u4t_combo_start_ms == 0U)
-            {
-                g_u4t_combo_start_ms = u4t_current_time;
-                g_b_combo_action_taken = false;
-            }
-            else
-            {
-                uint32_t u4t_combo_dur = u4t_current_time - g_u4t_combo_start_ms;
-                if ((u4t_combo_dur >= COMBO_HOLD_MS) && (g_b_combo_action_taken == false))
-                {
-                    g_b_combo_action_taken = true;
-                    synth_seq_toggle_record();
-                }
-                else
-                {
-                    /* Holding combo */
-                }
-            }
+            uint8_t u1t_note_index = (uint8_t)(u1t_cmd - '1');
+            g_s1t_uart_note_index = (int8_t)u1t_note_index;
+            g_u4t_uart_note_duration_ms = UART_NOTE_PLAY_MS;
+            bsp_uart_send_string(UART_NOTE_MESSAGES[u1t_note_index]);
         }
         else
         {
-            g_u4t_combo_start_ms = 0U;
-            g_b_combo_action_taken = false;
-        }
-
-        /* 4. Check UART RX Commands from PC (Optional Console Interface) */
-        if (bsp_uart_has_rx_char())
-        {
-            char u1t_cmd = bsp_uart_get_rx_char();
             switch (u1t_cmd)
             {
-                case '1':
-                    g_s1t_uart_note_index = SYNTH_NOTE_INDEX_DO;
-                    g_u4t_uart_note_duration_ms = UART_NOTE_PLAY_MS;
-                    bsp_uart_send_string("[UART CMD] Note 1: C (DO)\r\n");
-                    break;
-                case '2':
-                    g_s1t_uart_note_index = SYNTH_NOTE_INDEX_RE;
-                    g_u4t_uart_note_duration_ms = UART_NOTE_PLAY_MS;
-                    bsp_uart_send_string("[UART CMD] Note 2: D (RE)\r\n");
-                    break;
-                case '3':
-                    g_s1t_uart_note_index = SYNTH_NOTE_INDEX_MI;
-                    g_u4t_uart_note_duration_ms = UART_NOTE_PLAY_MS;
-                    bsp_uart_send_string("[UART CMD] Note 3: E (MI)\r\n");
-                    break;
-                case '4':
-                    g_s1t_uart_note_index = SYNTH_NOTE_INDEX_SOL;
-                    g_u4t_uart_note_duration_ms = UART_NOTE_PLAY_MS;
-                    bsp_uart_send_string("[UART CMD] Note 4: G (SOL)\r\n");
-                    break;
                 case 'r':
                 case 'R':
                     synth_seq_toggle_record();
@@ -583,366 +519,355 @@ void app_synth_run(void)
                     break;
             }
         }
-        else
-        {
-            /* No incoming UART data */
-        }
+    }
+    else
+    {
+        /* No incoming UART data */
+    }
+}
 
-        /* 5. Determine Active Note to Play */
-        int8_t s1t_active_note = -1;
+static int8_t synth_select_active_note(const synth_keys_t *p_keys)
+{
+    int8_t s1t_active_note = -1;
 
-        if ((b_k1 == true) && (b_k4 == true))
+    if (((p_keys->b_k1 == true) && (p_keys->b_k4 == true)) ||
+        ((p_keys->b_k2 == true) && (p_keys->b_k3 == true)))
+    {
+        /* In Combo mode: mute note to allow clean trigger */
+        s1t_active_note = -1;
+    }
+    else if (p_keys->b_k1 == true)
+    {
+        s1t_active_note = SYNTH_NOTE_INDEX_DO;
+    }
+    else if (p_keys->b_k2 == true)
+    {
+        s1t_active_note = SYNTH_NOTE_INDEX_RE;
+    }
+    else if (p_keys->b_k3 == true)
+    {
+        s1t_active_note = SYNTH_NOTE_INDEX_MI;
+    }
+    else if (p_keys->b_k4 == true)
+    {
+        s1t_active_note = SYNTH_NOTE_INDEX_SOL;
+    }
+    else if (g_u4t_uart_note_duration_ms > 0U)
+    {
+        s1t_active_note = g_s1t_uart_note_index;
+        if (g_u4t_uart_note_duration_ms >= UART_NOTE_TICK_MS)
         {
-            /* In Combo mode: mute note to allow clean record trigger */
-            s1t_active_note = -1;
-        }
-        else if (b_k1 == true)
-        {
-            s1t_active_note = SYNTH_NOTE_INDEX_DO;
-        }
-        else if (b_k2 == true)
-        {
-            s1t_active_note = SYNTH_NOTE_INDEX_RE;
-        }
-        else if (b_k3 == true)
-        {
-            s1t_active_note = SYNTH_NOTE_INDEX_MI;
-        }
-        else if (b_k4 == true)
-        {
-            s1t_active_note = SYNTH_NOTE_INDEX_SOL;
-        }
-        else if (g_u4t_uart_note_duration_ms > 0U)
-        {
-            s1t_active_note = g_s1t_uart_note_index;
-            if (g_u4t_uart_note_duration_ms >= 5U)
-            {
-                g_u4t_uart_note_duration_ms -= 5U;
-            }
-            else
-            {
-                g_u4t_uart_note_duration_ms = 0U;
-            }
-        }
-        else
-        {
-            s1t_active_note = -1;
-        }
-
-        /* 6. Read Live Potentiometer Input (ADC Interrupt Driven) */
-        int32_t s4t_pitch_bend_pct = bsp_adc_get_pitch_bend_percent(); /* Pitch bend: 0 */
-        uint8_t u1t_volume_pct     = bsp_adc_get_volume_percent();     /* Potentiometer PA4: 0 to 100% */
-
-        static uint8_t s_u1t_prev_vol = 255U;
-        static uint32_t s_u4t_vol_timer = 0U;
-        if ((u4t_current_time - s_u4t_vol_timer) >= 200U)
-        {
-            int32_t s4t_vdiff = (int32_t)u1t_volume_pct - (int32_t)s_u1t_prev_vol;
-            if ((s4t_vdiff >= 5) || (s4t_vdiff <= -5))
-            {
-                s_u4t_vol_timer = u4t_current_time;
-                s_u1t_prev_vol = u1t_volume_pct;
-                bsp_uart_send_string("[VOL] ");
-                synth_uart_send_dec((uint32_t)u1t_volume_pct);
-                bsp_uart_send_string("%\r\n");
-            }
-            else
-            {
-                /* Small change */
-            }
+            g_u4t_uart_note_duration_ms -= UART_NOTE_TICK_MS;
         }
         else
         {
-            /* Throttle period */
+            g_u4t_uart_note_duration_ms = 0U;
         }
+    }
+    else
+    {
+        s1t_active_note = -1;
+    }
 
-        /* 7. Sequence Recording Logic */
-        if (g_recorder_mode == RECORDER_RECORDING)
+    return s1t_active_note;
+}
+
+static void synth_report_volume(uint32_t u4t_current_time, uint8_t u1t_volume_pct)
+{
+    static uint8_t s_u1t_prev_vol = 255U;
+    static uint32_t s_u4t_vol_timer = 0U;
+
+    if ((u4t_current_time - s_u4t_vol_timer) >= VOLUME_REPORT_PERIOD_MS)
+    {
+        int32_t s4t_vdiff = (int32_t)u1t_volume_pct - (int32_t)s_u1t_prev_vol;
+        if ((s4t_vdiff >= VOLUME_REPORT_DELTA_PCT) ||
+            (s4t_vdiff <= -VOLUME_REPORT_DELTA_PCT))
         {
-            uint32_t u4t_now = u4t_current_time;
+            s_u4t_vol_timer = u4t_current_time;
+            s_u1t_prev_vol = u1t_volume_pct;
+            bsp_uart_send_string("[VOL] ");
+            synth_uart_send_dec((uint32_t)u1t_volume_pct);
+            bsp_uart_send_string("%\r\n");
+        }
+        else
+        {
+            /* Small change */
+        }
+    }
+    else
+    {
+        /* Throttle period */
+    }
+}
 
-            if (s1t_active_note >= 0)
+static void synth_play_note(uint8_t u1t_octave, int8_t s1t_note_index,
+                            uint8_t u1t_volume_pct)
+{
+    uint8_t u1t_oct_idx = 1U;
+    uint32_t u4t_frequency;
+    uint16_t u2t_volume_raw;
+
+    bsp_gpio_led_red_set(true);
+    if ((u1t_octave >= (uint8_t)OCTAVE_LOW) && (u1t_octave <= (uint8_t)OCTAVE_HIGH))
+    {
+        u1t_oct_idx = u1t_octave - SYNTH_OCTAVE_OFFSET;
+    }
+    else
+    {
+        u1t_oct_idx = 1U;
+    }
+    u4t_frequency = NOTE_FREQ[u1t_oct_idx][(uint8_t)s1t_note_index];
+    u2t_volume_raw = (uint16_t)(((uint32_t)u1t_volume_pct * VOLUME_RAW_MAX) /
+                                PERCENT_SCALE);
+    bsp_buzzer_play_chunk(u4t_frequency, u2t_volume_raw);
+}
+
+static void synth_update_recording(uint32_t u4t_current_time, int8_t s1t_active_note)
+{
+    if (g_recorder_mode == RECORDER_RECORDING)
+    {
+        if (s1t_active_note >= 0)
+        {
+            if (g_b_rec_is_note_active == false)
             {
-                if (g_b_rec_is_note_active == false)
+                /* Note Just Pressed */
+                if (g_u2t_seq_count > 0U)
                 {
-                    /* Note Just Pressed */
-                    if (g_u2t_seq_count > 0U)
+                    uint32_t u4t_rest = u4t_current_time - g_u4t_rec_last_release_ms;
+                    if (u4t_rest > MAX_REST_GAP_RECORD_MS)
                     {
-                        uint32_t u4t_rest = u4t_now - g_u4t_rec_last_release_ms;
-                        if (u4t_rest > MAX_REST_GAP_RECORD_MS)
-                        {
-                            u4t_rest = MAX_REST_GAP_RECORD_MS;
-                        }
-                        else
-                        {
-                            /* Gap within bounds */
-                        }
-                        g_sequence[g_u2t_seq_count - 1U].rest_ms = (uint16_t)u4t_rest;
+                        u4t_rest = MAX_REST_GAP_RECORD_MS;
                     }
                     else
                     {
-                        /* First note */
+                        /* Gap within bounds */
                     }
-                    g_b_rec_is_note_active = true;
-                    g_s1t_rec_current_note = s1t_active_note;
-                    g_u1t_rec_current_octave = (uint8_t)g_current_octave;
-                    g_u4t_rec_note_start_ms = u4t_now;
-                }
-                else if (s1t_active_note != g_s1t_rec_current_note)
-                {
-                    /* Note Changed without releasing */
-                    uint32_t u4t_dur = u4t_now - g_u4t_rec_note_start_ms;
-                    if (u4t_dur < MIN_NOTE_DUR_RECORD_MS)
-                    {
-                        u4t_dur = MIN_NOTE_DUR_RECORD_MS;
-                    }
-                    else
-                    {
-                        /* Duration is valid */
-                    }
-                    if (g_u2t_seq_count < SYNTH_MAX_SEQUENCE_STEPS)
-                    {
-                        g_sequence[g_u2t_seq_count].note_index = g_s1t_rec_current_note;
-                        g_sequence[g_u2t_seq_count].octave = g_u1t_rec_current_octave;
-                        g_sequence[g_u2t_seq_count].duration_ms = (uint16_t)u4t_dur;
-                        g_sequence[g_u2t_seq_count].rest_ms = TRANSITION_REST_MS;
-                        g_u2t_seq_count++;
-                    }
-                    else
-                    {
-                        /* Memory full */
-                    }
-                    g_s1t_rec_current_note = s1t_active_note;
-                    g_u1t_rec_current_octave = (uint8_t)g_current_octave;
-                    g_u4t_rec_note_start_ms = u4t_now;
+                    g_sequence[g_u2t_seq_count - 1U].rest_ms = (uint16_t)u4t_rest;
                 }
                 else
                 {
-                    /* Note is being held */
+                    /* First note */
                 }
+                g_b_rec_is_note_active = true;
+                g_s1t_rec_current_note = s1t_active_note;
+                g_u1t_rec_current_octave = (uint8_t)g_current_octave;
+                g_u4t_rec_note_start_ms = u4t_current_time;
+            }
+            else if (s1t_active_note != g_s1t_rec_current_note)
+            {
+                /* Note Changed without releasing */
+                (void)synth_seq_append_note(u4t_current_time, MIN_NOTE_DUR_RECORD_MS,
+                                            TRANSITION_REST_MS);
+                g_s1t_rec_current_note = s1t_active_note;
+                g_u1t_rec_current_octave = (uint8_t)g_current_octave;
+                g_u4t_rec_note_start_ms = u4t_current_time;
             }
             else
             {
-                /* No note pressed -> LED blinks to visually signal RECORDING STANDBY */
-                if ((u4t_now - g_u4t_rec_blink_timer_ms) >= REC_LED_BLINK_PERIOD_MS)
-                {
-                    g_u4t_rec_blink_timer_ms = u4t_now;
-                    g_b_rec_blink_led_state = !g_b_rec_blink_led_state;
-                    bsp_gpio_led_red_set(g_b_rec_blink_led_state);
-                }
-                else
-                {
-                    /* Waiting for blink period */
-                }
-
-                if (g_b_rec_is_note_active == true)
-                {
-                    /* Note Released */
-                    uint32_t u4t_dur = u4t_now - g_u4t_rec_note_start_ms;
-                    if (u4t_dur < MIN_NOTE_DUR_RECORD_MS)
-                    {
-                        u4t_dur = MIN_NOTE_DUR_RECORD_MS;
-                    }
-                    else
-                    {
-                        /* Duration is valid */
-                    }
-                    if (g_u2t_seq_count < SYNTH_MAX_SEQUENCE_STEPS)
-                    {
-                        g_sequence[g_u2t_seq_count].note_index = g_s1t_rec_current_note;
-                        g_sequence[g_u2t_seq_count].octave = g_u1t_rec_current_octave;
-                        g_sequence[g_u2t_seq_count].duration_ms = (uint16_t)u4t_dur;
-                        g_sequence[g_u2t_seq_count].rest_ms = DEF_REST_GAP_MS;
-                        g_u2t_seq_count++;
-
-                        bsp_uart_send_string("[RECORDER] Step ");
-                        synth_uart_send_dec((uint32_t)g_u2t_seq_count);
-                        bsp_uart_send_string(": ");
-                        bsp_uart_send_string(NOTE_NAMES[g_s1t_rec_current_note]);
-                        bsp_uart_send_string(" (");
-                        synth_uart_send_dec(u4t_dur);
-                        bsp_uart_send_string(" ms)\r\n");
-
-                        if (g_u2t_seq_count >= SYNTH_MAX_SEQUENCE_STEPS)
-                        {
-                            bsp_uart_send_string("[RECORDER] Sequence memory full!\r\n");
-                            synth_seq_stop_record();
-                        }
-                        else
-                        {
-                            /* Memory still available */
-                        }
-                    }
-                    else
-                    {
-                        /* Memory full */
-                    }
-                    g_b_rec_is_note_active = false;
-                    g_u4t_rec_last_release_ms = u4t_now;
-                }
-                else
-                {
-                    /* No note was active */
-                }
+                /* Note is being held */
             }
         }
         else
         {
-            /* Not in recording mode */
+            /* No note pressed -> LED blinks to visually signal RECORDING STANDBY */
+            if ((u4t_current_time - g_u4t_rec_blink_timer_ms) >= REC_LED_BLINK_PERIOD_MS)
+            {
+                g_u4t_rec_blink_timer_ms = u4t_current_time;
+                g_b_rec_blink_led_state = !g_b_rec_blink_led_state;
+                bsp_gpio_led_red_set(g_b_rec_blink_led_state);
+            }
+            else
+            {
+                /* Waiting for blink period */
+            }
+
+            if (g_b_rec_is_note_active == true)
+            {
+                uint32_t u4t_duration;
+
+                /* Note Released */
+                u4t_duration = synth_seq_append_note(u4t_current_time, MIN_NOTE_DUR_RECORD_MS,
+                                                     DEF_REST_GAP_MS);
+                if (u4t_duration > 0U)
+                {
+                    bsp_uart_send_string("[RECORDER] Step ");
+                    synth_uart_send_dec((uint32_t)g_u2t_seq_count);
+                    bsp_uart_send_string(": ");
+                    bsp_uart_send_string(NOTE_NAMES[g_s1t_rec_current_note]);
+                    bsp_uart_send_string(" (");
+                    synth_uart_send_dec(u4t_duration);
+                    bsp_uart_send_string(" ms)\r\n");
+
+                    if (g_u2t_seq_count >= SYNTH_MAX_SEQUENCE_STEPS)
+                    {
+                        bsp_uart_send_string("[RECORDER] Sequence memory full!\r\n");
+                        synth_seq_stop_record();
+                    }
+                    else
+                    {
+                        /* Memory still available */
+                    }
+                }
+                else
+                {
+                    /* Memory full */
+                }
+                g_b_rec_is_note_active = false;
+                g_u4t_rec_last_release_ms = u4t_current_time;
+            }
+            else
+            {
+                /* No note was active */
+            }
+        }
+    }
+    else
+    {
+        /* Not in recording mode */
+    }
+}
+
+static void synth_update_playback(uint32_t u4t_current_time, int8_t s1t_active_note,
+                                  uint8_t u1t_volume_pct)
+{
+    if (s1t_active_note >= 0)
+    {
+        /* If user presses any live key during playback, immediately stop playback */
+        synth_seq_stop_playback();
+    }
+    else
+    {
+        synth_step_t *p_step = &g_sequence[g_u2t_play_current_step];
+        uint32_t u4t_elapsed = u4t_current_time - g_u4t_play_step_start_ms;
+
+        if (g_b_play_in_note_phase == true)
+        {
+            /* Note Sounding Phase */
+            synth_play_note(p_step->octave, p_step->note_index, u1t_volume_pct);
+            if (u4t_elapsed >= (uint32_t)p_step->duration_ms)
+            {
+                /* Note duration reached -> Transition to Rest Phase */
+                g_b_play_in_note_phase = false;
+                g_u4t_play_step_start_ms = u4t_current_time;
+                bsp_buzzer_off();
+                bsp_gpio_led_red_set(false);
+            }
+            else
+            {
+                /* Still in note sounding duration */
+            }
+        }
+        else
+        {
+            uint32_t u4t_rest_target = (uint32_t)p_step->rest_ms;
+
+            /* Rest/Silence Phase between notes */
+            bsp_buzzer_off();
+            bsp_gpio_led_red_set(false);
+            bsp_delay_us(1000U);
+            if (u4t_rest_target < PLAYBACK_MIN_GAP_MS)
+            {
+                u4t_rest_target = PLAYBACK_MIN_GAP_MS;
+            }
+            else
+            {
+                /* Target rest is adequate */
+            }
+
+            if (u4t_elapsed >= u4t_rest_target)
+            {
+                /* Rest finished -> Advance to next note */
+                g_u2t_play_current_step++;
+                if (g_u2t_play_current_step >= g_u2t_seq_count)
+                {
+                    synth_seq_stop_playback();
+                    bsp_uart_send_string("[PLAYBACK] Finished sequence playback!\r\n");
+                }
+                else
+                {
+                    g_b_play_in_note_phase = true;
+                    g_u4t_play_step_start_ms = u4t_current_time;
+                }
+            }
+            else
+            {
+                /* Still in rest duration */
+            }
+        }
+    }
+}
+
+static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_pct)
+{
+    if (s1t_active_note >= 0)
+    {
+        synth_play_note((uint8_t)g_current_octave, s1t_active_note, u1t_volume_pct);
+        if (s1t_active_note != g_s1t_last_played)
+        {
+            bsp_uart_send_string("[KEY] Playing: ");
+            bsp_uart_send_string(NOTE_NAMES[s1t_active_note]);
+            bsp_uart_send_string(" | Vol: ");
+            synth_uart_send_dec((uint32_t)u1t_volume_pct);
+            bsp_uart_send_string("%\r\n");
+            g_s1t_last_played = s1t_active_note;
+        }
+        else
+        {
+            /* Note already logged */
+        }
+    }
+    else
+    {
+        bsp_buzzer_off();
+        if (g_recorder_mode != RECORDER_RECORDING)
+        {
+            bsp_gpio_led_red_set(false);
+        }
+        else
+        {
+            /* In recording mode, LED is handled by blinking logic above */
         }
 
-        /* 8. Sound Synthesis / Playback State Machine */
+        g_s1t_last_played = -1;
+        bsp_delay_us(1000U);
+    }
+}
+
+void app_synth_run(void)
+{
+    while (true)
+    {
+        uint32_t u4t_current_time = bsp_timer_get_ms();
+        synth_keys_t keys;
+        int8_t s1t_active_note;
+        uint8_t u1t_volume_pct;
+
+        if (bsp_gpio_get_exti_flag() == true)
+        {
+            bsp_gpio_clear_exti_flag();
+            /* Hardware EXTI10 flag cleared without altering pitch/octave */
+        }
+        else
+        {
+            /* No EXTI event */
+        }
+        keys.b_k1 = bsp_gpio_read_key1_do();
+        keys.b_k2 = bsp_gpio_read_key2_re();
+        keys.b_k3 = bsp_gpio_read_key3_mi();
+        keys.b_k4 = bsp_gpio_read_key4_sol();
+        synth_handle_combo(u4t_current_time, &keys);
+        synth_handle_uart();
+        s1t_active_note = synth_select_active_note(&keys);
+        u1t_volume_pct = bsp_adc_get_volume_percent();
+        synth_report_volume(u4t_current_time, u1t_volume_pct);
+        synth_update_recording(u4t_current_time, s1t_active_note);
         if (g_recorder_mode == RECORDER_PLAYING)
         {
-            /* If user presses any live key during playback, immediately stop playback */
-            if (s1t_active_note >= 0)
-            {
-                synth_seq_stop_playback();
-            }
-            else
-            {
-                synth_step_t *step = &g_sequence[g_u2t_play_current_step];
-                uint32_t u4t_now = u4t_current_time;
-                uint32_t u4t_elapsed = u4t_now - g_u4t_play_step_start_ms;
-
-                if (g_b_play_in_note_phase == true)
-                {
-                    /* 8.1 Note Sounding Phase */
-                    bsp_gpio_led_red_set(true);
-
-                    uint8_t u1t_oct_idx = 1U;
-                    if ((step->octave >= OCTAVE_LOW) && (step->octave <= OCTAVE_HIGH))
-                    {
-                        u1t_oct_idx = step->octave - SYNTH_OCTAVE_OFFSET;
-                    }
-                    else
-                    {
-                        u1t_oct_idx = 1U;
-                    }
-                    uint32_t u4t_base_freq = NOTE_FREQ[u1t_oct_idx][step->note_index];
-
-                    /* Apply live joystick pitch bend & volume during playback */
-                    int32_t s4t_shifted_freq = (int32_t)u4t_base_freq + (((int32_t)u4t_base_freq * s4t_pitch_bend_pct) / 100);
-                    if (s4t_shifted_freq < FREQ_MIN_AUDIBLE_HZ)
-                    {
-                        s4t_shifted_freq = FREQ_MIN_AUDIBLE_HZ;
-                    }
-                    else
-                    {
-                        /* Frequency is valid */
-                    }
-                    /* Apply live volume from Potentiometer PA4 */
-                    uint16_t u2t_volume_raw = (uint16_t)(((uint32_t)u1t_volume_pct * 4095U) / 100U);
-
-                    bsp_buzzer_play_chunk((uint32_t)s4t_shifted_freq, u2t_volume_raw);
-
-                    if (u4t_elapsed >= (uint32_t)step->duration_ms)
-                    {
-                        /* Note duration reached -> Transition to Rest Phase */
-                        g_b_play_in_note_phase = false;
-                        g_u4t_play_step_start_ms = u4t_now;
-                        bsp_buzzer_off();
-                        bsp_gpio_led_red_set(false);
-                    }
-                    else
-                    {
-                        /* Still in note sounding duration */
-                    }
-                }
-                else
-                {
-                    /* 8.2 Rest/Silence Phase between notes */
-                    bsp_buzzer_off();
-                    bsp_gpio_led_red_set(false);
-                    bsp_delay_us(1000U);
-
-                    uint32_t u4t_rest_target = (uint32_t)step->rest_ms;
-                    if (u4t_rest_target < PLAYBACK_MIN_GAP_MS)
-                    {
-                        u4t_rest_target = PLAYBACK_MIN_GAP_MS; /* Minimum articulation gap */
-                    }
-                    else
-                    {
-                        /* Target rest is adequate */
-                    }
-
-                    if (u4t_elapsed >= u4t_rest_target)
-                    {
-                        /* Rest finished -> Advance to next note */
-                        g_u2t_play_current_step++;
-                        if (g_u2t_play_current_step >= g_u2t_seq_count)
-                        {
-                            synth_seq_stop_playback();
-                            bsp_uart_send_string("[PLAYBACK] Finished sequence playback!\r\n");
-                        }
-                        else
-                        {
-                            g_b_play_in_note_phase = true;
-                            g_u4t_play_step_start_ms = u4t_now;
-                        }
-                    }
-                    else
-                    {
-                        /* Still in rest duration */
-                    }
-                }
-            }
+            synth_update_playback(u4t_current_time, s1t_active_note, u1t_volume_pct);
         }
         else
         {
-            /* 9. Normal Live Synthesizer Mode (Idle or Recording) */
-            if (s1t_active_note >= 0)
-            {
-                bsp_gpio_led_red_set(true);
-
-                uint8_t u1t_oct_idx = (uint8_t)g_current_octave - SYNTH_OCTAVE_OFFSET;
-                uint32_t u4t_base_freq = NOTE_FREQ[u1t_oct_idx][s1t_active_note];
-
-                /* Apply Live Pitch Bend from Joystick VRx */
-                int32_t s4t_shifted_freq = (int32_t)u4t_base_freq + (((int32_t)u4t_base_freq * s4t_pitch_bend_pct) / 100);
-                if (s4t_shifted_freq < FREQ_MIN_AUDIBLE_HZ)
-                {
-                    s4t_shifted_freq = FREQ_MIN_AUDIBLE_HZ;
-                }
-                else
-                {
-                    /* Frequency within valid range */
-                }
-
-                /* Map Volume percentage to Duty Cycle (0 - 4095) */
-                uint16_t u2t_volume_raw = (uint16_t)(((uint32_t)u1t_volume_pct * 4095U) / 100U);
-
-                bsp_buzzer_play_chunk((uint32_t)s4t_shifted_freq, u2t_volume_raw);
-
-                if (s1t_active_note != g_s1t_last_played)
-                {
-                    bsp_uart_send_string("[KEY] Playing: ");
-                    bsp_uart_send_string(NOTE_NAMES[s1t_active_note]);
-                    bsp_uart_send_string(" | Vol: ");
-                    synth_uart_send_dec((uint32_t)u1t_volume_pct);
-                    bsp_uart_send_string("%\r\n");
-                    g_s1t_last_played = s1t_active_note;
-                }
-                else
-                {
-                    /* Note already logged */
-                }
-            }
-            else
-            {
-                bsp_buzzer_off();
-                if (g_recorder_mode != RECORDER_RECORDING)
-                {
-                    bsp_gpio_led_red_set(false);
-                }
-                else
-                {
-                    /* In recording mode, LED is handled by blinking logic above */
-                }
-
-                g_s1t_last_played = -1;
-                bsp_delay_us(1000U);
-            }
+            synth_update_live_sound(s1t_active_note, u1t_volume_pct);
         }
     }
 }

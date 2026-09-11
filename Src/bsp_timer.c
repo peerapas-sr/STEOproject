@@ -45,15 +45,6 @@ uint32_t bsp_timer_get_ms(void)
     return g_u4t_system_ms;
 }
 
-void bsp_timer_delay_ms(uint32_t ms)
-{
-    uint32_t u4t_start = g_u4t_system_ms;
-    while ((g_u4t_system_ms - u4t_start) < ms)
-    {
-        __NOP();
-    }
-}
-
 /* TIM3 Interrupt Service Routine */
 void TIM3_IRQHandler(void)
 {

@@ -55,27 +55,6 @@ void bsp_adc_init(void)
     ADC1->CR2 |= ADC_CR2_SWSTART;
 }
 
-uint16_t bsp_adc_get_pot_raw(void)
-{
-    return g_u2t_adc_pot;
-}
-
-uint16_t bsp_adc_get_vrx_raw(void)
-{
-    return g_u2t_adc_pot;
-}
-
-uint16_t bsp_adc_get_vry_raw(void)
-{
-    return g_u2t_adc_pot;
-}
-
-/* No pitch bend when using single volume potentiometer */
-int32_t bsp_adc_get_pitch_bend_percent(void)
-{
-    return 0;
-}
-
 /* Calculate Volume percentage (0 to 100%) from Potentiometer on PA4 */
 uint8_t bsp_adc_get_volume_percent(void)
 {

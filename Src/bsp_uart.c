@@ -1,6 +1,6 @@
 /*******************************************************************************
  * File Name   : bsp_uart.c
- * Description : Board Support Package - USART2 Driver via Interrupt (No Polling)
+ * Description : USART2 Driver - Interrupt RX and Polling TX with Timeout
  * Target MCU  : STM32F411RET6
  * Standard    : Toyota Embedded MISRA-C Compliant (22 Rules)
  ******************************************************************************/
