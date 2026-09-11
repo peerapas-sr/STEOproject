@@ -25,10 +25,6 @@
 #include "bsp_joystick.h"
 #include "bsp_timer.h"
 #include "app_synth.h"
-#include "test_joystick.h"
-
-/* Mode Selection: Set to 1 to test HW-504 Joystick, 0 for Normal Synthesizer */
-#define TEST_JOYSTICK_MODE      (0)
 
 /* System Clock definition required by CMSIS */
 uint32_t SystemCoreClock = 16000000U;
@@ -48,15 +44,9 @@ int main(void)
     bsp_uart_init();     /* USART2 with RXNE Interrupt (No Polling) */
     bsp_timer_init();    /* TIM3 1ms Hardware Timer Interrupt */
 
-#if (TEST_JOYSTICK_MODE != 0)
-    /* 2. Run Standalone HW-504 Joystick Diagnostic Utility */
-    test_joystick_init();
-    test_joystick_run();
-#else
     /* 2. Initialize and Run Main Synthesizer Application Layer */
     app_synth_init();
     app_synth_run();
-#endif
 
     /* Should never reach here */
     while (1)

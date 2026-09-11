@@ -33,7 +33,6 @@
 #define CHIRP_DELAY_MS              (40U)
 #define STATUS_TONE_NONE_FREQ       (0U)
 
-#define COMBO_HOLD_MS               (600U)
 #define REC_LED_BLINK_PERIOD_MS     (200U)
 
 #define PLAYBACK_MIN_GAP_MS         (40U)
@@ -68,20 +67,9 @@ typedef struct {
     uint16_t rest_ms;      /* Gap between this note and next note */
 } synth_step_t;
 
-typedef struct {
-    bool b_k1;
-    bool b_k2;
-    bool b_k3;
-    bool b_k4;
-} synth_keys_t;
-
 /* Frequency Table for 4 Notes (Octave 7: C7, D7, E7, G7) - Shifted +2 Octaves */
 static const uint32_t NOTE_FREQ[SYNTH_NUM_NOTES] = {
     2093U, 2349U, 2637U, 3136U
-};
-
-static const char *NOTE_NAMES[SYNTH_NUM_NOTES] = {
-    "C7 (DO)", "D7 (RE)", "E7 (MI)", "G7 (SOL)"
 };
 
 /* Sequencer Memory and State */
@@ -105,13 +93,6 @@ static bool             g_b_play_in_note_phase = false;
 
 /* Sound Modulation Trackers */
 static uint32_t         g_u4t_lfo_start_ms = 0U;
-
-/* Command Arbitration & Combos */
-static bool             g_b_cmd_suppress = false;
-static uint32_t         g_u4t_combo_rec_start_ms = 0U;
-static bool             g_b_combo_rec_taken = false;
-static uint32_t         g_u4t_combo_play_start_ms = 0U;
-static bool             g_b_combo_play_taken = false;
 
 /* Helper: Sound feedback chimes */
 static void synth_play_status_tone(uint32_t u4t_first_freq, uint32_t u4t_second_freq)
@@ -264,96 +245,23 @@ static void synth_cmd_short_press(uint32_t u4t_now)
     }
 }
 
-/* Helper: Check hold duration for breadboard combos */
-static bool synth_check_combo_hold(bool b_active, uint32_t *p_start_ms, bool *p_taken, uint32_t u4t_now)
-{
-    bool b_triggered = false;
-
-    if (b_active == true)
-    {
-        if (*p_start_ms == 0U)
-        {
-            *p_start_ms = u4t_now;
-            *p_taken = false;
-        }
-        else if (((u4t_now - *p_start_ms) >= COMBO_HOLD_MS) && (*p_taken == false))
-        {
-            *p_taken = true;
-            b_triggered = true;
-        }
-        else
-        {
-            /* Holding */
-        }
-    }
-    else
-    {
-        *p_start_ms = 0U;
-        *p_taken = false;
-    }
-
-    return b_triggered;
-}
-
-/* Breadboard Combos & Command Arbitration */
-static void synth_handle_combos(uint32_t u4t_now, const synth_keys_t *p_keys)
-{
-    bool b_rec_combo = ((p_keys->b_k1 == true) && (p_keys->b_k4 == true));
-    bool b_play_combo = ((p_keys->b_k2 == true) && (p_keys->b_k3 == true));
-
-    if (g_b_cmd_suppress == true)
-    {
-        if ((bsp_joystick_is_pressed() == false) && (b_rec_combo == false) && (b_play_combo == false))
-        {
-            g_b_cmd_suppress = false;
-        }
-        else
-        {
-            /* Wait for release */
-        }
-    }
-    else
-    {
-        if (synth_check_combo_hold(b_rec_combo, &g_u4t_combo_rec_start_ms, &g_b_combo_rec_taken, u4t_now) == true)
-        {
-            synth_cmd_toggle_recording(u4t_now);
-            g_b_cmd_suppress = true;
-        }
-        else if ((b_rec_combo == false) &&
-                 (synth_check_combo_hold(b_play_combo, &g_u4t_combo_play_start_ms, &g_b_combo_play_taken, u4t_now) == true))
-        {
-            synth_cmd_toggle_playback();
-            g_b_cmd_suppress = true;
-        }
-        else
-        {
-            /* No combo */
-        }
-    }
-}
-
-static int8_t synth_select_active_note(const synth_keys_t *p_keys)
+static int8_t synth_read_active_note(void)
 {
     int8_t s1t_active_note = -1;
 
-    if (((p_keys->b_k1 == true) && (p_keys->b_k4 == true)) ||
-        ((p_keys->b_k2 == true) && (p_keys->b_k3 == true)))
-    {
-        s1t_active_note = -1;
-    }
-    else if (p_keys->b_k1 == true)
+    if (bsp_gpio_read_key1_do() == true)
     {
         s1t_active_note = SYNTH_NOTE_INDEX_DO;
     }
-    else if (p_keys->b_k2 == true)
+    else if (bsp_gpio_read_key2_re() == true)
     {
         s1t_active_note = SYNTH_NOTE_INDEX_RE;
     }
-    else if (p_keys->b_k3 == true)
+    else if (bsp_gpio_read_key3_mi() == true)
     {
         s1t_active_note = SYNTH_NOTE_INDEX_MI;
     }
-    else if (p_keys->b_k4 == true)
+    else if (bsp_gpio_read_key4_sol() == true)
     {
         s1t_active_note = SYNTH_NOTE_INDEX_SOL;
     }
@@ -606,14 +514,11 @@ static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_p
         if (s1t_active_note != g_s1t_last_played)
         {
             g_u4t_lfo_start_ms = u4t_now;
-            bsp_uart_send_string("[KEY] Playing: ");
-            bsp_uart_send_string(NOTE_NAMES[s1t_active_note]);
-            bsp_uart_send_string("\r\n");
             g_s1t_last_played = s1t_active_note;
         }
         else
         {
-            /* Continues */
+            /* Continues playing same note */
         }
         synth_play_note(s1t_active_note, u1t_volume_pct, true, u4t_now);
     }
@@ -636,10 +541,7 @@ static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_p
 
 void app_synth_init(void)
 {
-    bsp_uart_send_string("\r\n===============================================\r\n");
-    bsp_uart_send_string("  STM32 Synthesizer & Sequence Recorder\r\n");
-    bsp_uart_send_string("  HW-504: PC0=Vx, PC1=Vy, PC2=SW, PA4=Volume\r\n");
-    bsp_uart_send_string("===============================================\r\n");
+    bsp_uart_send_string("[SYNTH] Ready (Octave 7 + HW-504 Joystick)\r\n");
 
     /* Startup Welcome Chime: C7 -> E7 -> G7 */
     bsp_buzzer_play_chunk(NOTE_FREQ[SYNTH_NOTE_INDEX_DO], CHIME_NOTE_VOL_RAW);
@@ -655,10 +557,9 @@ void app_synth_run(void)
     while (true)
     {
         uint32_t u4t_now = bsp_timer_get_ms();
-        synth_keys_t keys;
+        joy_sw_event_t joy_evt;
         int8_t s1t_active_note;
         uint8_t u1t_volume_pct;
-        joy_sw_event_t joy_evt;
 
         if (bsp_gpio_get_exti_flag() == true)
         {
@@ -673,46 +574,22 @@ void app_synth_run(void)
         bsp_adc_service(u4t_now);
         bsp_joystick_service(u4t_now);
 
-        /* Read Inputs */
-        keys.b_k1 = bsp_gpio_read_key1_do();
-        keys.b_k2 = bsp_gpio_read_key2_re();
-        keys.b_k3 = bsp_gpio_read_key3_mi();
-        keys.b_k4 = bsp_gpio_read_key4_sol();
-
         /* Process Joystick Switch Events */
         joy_evt = bsp_joystick_get_event();
         if (joy_evt == JOY_SW_EVT_SHORT_PRESS)
         {
-            if (g_b_cmd_suppress == false)
-            {
-                synth_cmd_short_press(u4t_now);
-                g_b_cmd_suppress = true;
-            }
-            else
-            {
-                /* Suppressed */
-            }
+            synth_cmd_short_press(u4t_now);
         }
         else if (joy_evt == JOY_SW_EVT_LONG_PRESS)
         {
-            if (g_b_cmd_suppress == false)
-            {
-                synth_cmd_toggle_recording(u4t_now);
-                g_b_cmd_suppress = true;
-            }
-            else
-            {
-                /* Suppressed */
-            }
+            synth_cmd_toggle_recording(u4t_now);
         }
         else
         {
             /* No switch event */
         }
 
-        synth_handle_combos(u4t_now, &keys);
-
-        s1t_active_note = synth_select_active_note(&keys);
+        s1t_active_note = synth_read_active_note();
         u1t_volume_pct = bsp_adc_get_volume_percent();
 
         synth_update_recording(u4t_now, s1t_active_note);

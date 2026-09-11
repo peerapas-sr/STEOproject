@@ -11,30 +11,19 @@
 #include "bsp_joystick.h"
 #include "bsp_adc.h"
 #include "bsp_gpio.h"
-#include "bsp_uart.h"
 
 /* Named Constants (Rule 5 & Rule 10) */
-#define JOY_CALIB_SAMPLES       (32U)
+#define JOY_CENTER_VAL          (2048U)
 #define JOY_DEADZONE_COUNTS     (160U)
 #define JOY_MAX_ADC             (4095U)
-#define JOY_CENTER_MIN          (1024U)
-#define JOY_CENTER_MAX          (3071U)
-#define JOY_CENTER_FALLBACK     (2048U)
 #define JOY_NORM_MAX            (1000)
 
 #define SW_HOLD_MS              (600U)
 #define SW_DEBOUNCE_MS          (30U)
 
-/* Calibration & Filtering Trackers */
-static uint16_t         g_u2t_calib_count = 0U;
-static uint32_t         g_u4t_sum_x = 0U;
-static uint32_t         g_u4t_sum_y = 0U;
-static uint16_t         g_u2t_center_x = 2048U;
-static uint16_t         g_u2t_center_y = 2048U;
-static bool             g_b_calibrated = false;
-
-static uint16_t         g_u2t_ema_x = 2048U;
-static uint16_t         g_u2t_ema_y = 2048U;
+/* Filtering Trackers */
+static uint16_t         g_u2t_ema_x = JOY_CENTER_VAL;
+static uint16_t         g_u2t_ema_y = JOY_CENTER_VAL;
 static bool             g_b_ema_init = false;
 
 static int32_t          g_s4t_norm_x = 0;
@@ -88,70 +77,30 @@ static int32_t joystick_calc_norm(uint16_t u2t_ema, uint16_t u2t_center)
     return s4t_norm;
 }
 
-/* Helper: Validate center calibration bounds */
-static uint16_t joystick_validate_center(uint32_t u4t_avg, const char *axis_name)
-{
-    uint16_t u2t_center = 2048U;
-
-    if ((u4t_avg < JOY_CENTER_MIN) || (u4t_avg > JOY_CENTER_MAX))
-    {
-        bsp_uart_send_string("[WARN] Joystick center out of range: ");
-        bsp_uart_send_string(axis_name);
-        bsp_uart_send_string("\r\n");
-        u2t_center = JOY_CENTER_FALLBACK;
-    }
-    else
-    {
-        u2t_center = (uint16_t)u4t_avg;
-    }
-
-    return u2t_center;
-}
-
 /* Service Analog Axes */
 static void joystick_service_axes(void)
 {
-    uint16_t u2t_raw_x = 2048U;
-    uint16_t u2t_raw_y = 2048U;
+    uint16_t u2t_raw_x = JOY_CENTER_VAL;
+    uint16_t u2t_raw_y = JOY_CENTER_VAL;
 
     if (bsp_adc_get_joystick_raw(&u2t_raw_x, &u2t_raw_y) == true)
     {
-        if (g_b_calibrated == false)
+        if (g_b_ema_init == false)
         {
-            g_u4t_sum_x += (uint32_t)u2t_raw_x;
-            g_u4t_sum_y += (uint32_t)u2t_raw_y;
-            g_u2t_calib_count++;
-
-            if (g_u2t_calib_count >= JOY_CALIB_SAMPLES)
-            {
-                g_u2t_center_x = joystick_validate_center(g_u4t_sum_x / JOY_CALIB_SAMPLES, "X");
-                g_u2t_center_y = joystick_validate_center(g_u4t_sum_y / JOY_CALIB_SAMPLES, "Y");
-                g_b_calibrated = true;
-            }
-            else
-            {
-                /* Gathering samples */
-            }
+            g_u2t_ema_x = u2t_raw_x;
+            g_u2t_ema_y = u2t_raw_y;
+            g_b_ema_init = true;
         }
         else
         {
-            if (g_b_ema_init == false)
-            {
-                g_u2t_ema_x = u2t_raw_x;
-                g_u2t_ema_y = u2t_raw_y;
-                g_b_ema_init = true;
-            }
-            else
-            {
-                uint32_t u4t_fx = (((uint32_t)g_u2t_ema_x * 3U) + (uint32_t)u2t_raw_x) / 4U;
-                uint32_t u4t_fy = (((uint32_t)g_u2t_ema_y * 3U) + (uint32_t)u2t_raw_y) / 4U;
-                g_u2t_ema_x = (uint16_t)u4t_fx;
-                g_u2t_ema_y = (uint16_t)u4t_fy;
-            }
-
-            g_s4t_norm_x = joystick_calc_norm(g_u2t_ema_x, g_u2t_center_x);
-            g_s4t_norm_y = joystick_calc_norm(g_u2t_ema_y, g_u2t_center_y);
+            uint32_t u4t_fx = (((uint32_t)g_u2t_ema_x * 3U) + (uint32_t)u2t_raw_x) / 4U;
+            uint32_t u4t_fy = (((uint32_t)g_u2t_ema_y * 3U) + (uint32_t)u2t_raw_y) / 4U;
+            g_u2t_ema_x = (uint16_t)u4t_fx;
+            g_u2t_ema_y = (uint16_t)u4t_fy;
         }
+
+        g_s4t_norm_x = joystick_calc_norm(g_u2t_ema_x, JOY_CENTER_VAL);
+        g_s4t_norm_y = joystick_calc_norm(g_u2t_ema_y, JOY_CENTER_VAL);
     }
     else
     {
@@ -235,11 +184,9 @@ static void joystick_service_switch(uint32_t now_ms)
 
 void bsp_joystick_init(void)
 {
-    g_u2t_calib_count = 0U;
-    g_u4t_sum_x = 0U;
-    g_u4t_sum_y = 0U;
-    g_b_calibrated = false;
     g_b_ema_init = false;
+    g_u2t_ema_x = JOY_CENTER_VAL;
+    g_u2t_ema_y = JOY_CENTER_VAL;
     g_s4t_norm_x = 0;
     g_s4t_norm_y = 0;
     g_b_sw_boot_locked = true;
