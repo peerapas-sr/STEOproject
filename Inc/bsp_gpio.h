@@ -24,16 +24,12 @@
 /* Status LED */
 #define LED_RED_PIN       (6UL)  /* PA6  - Red Status LED */
 
-/* Nucleo User Button */
-#define BTN_USER_PIN      (13UL) /* PC13 - Blue User Button (Active Low) */
-
 /* Function Prototypes */
 void bsp_gpio_init(void);
 bool bsp_gpio_read_key1_do(void);
 bool bsp_gpio_read_key2_re(void);
 bool bsp_gpio_read_key3_mi(void);
 bool bsp_gpio_read_key4_sol(void);
-bool bsp_gpio_read_btn_user(void);
 void bsp_gpio_led_red_set(bool state);
 bool bsp_gpio_get_exti_flag(void);
 void bsp_gpio_clear_exti_flag(void);

@@ -26,10 +26,6 @@ void bsp_gpio_init(void)
     RCC->AHB1ENR |= (RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN | RCC_AHB1ENR_GPIOCEN);
     RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
 
-    /* 1.1 Configure Input User Button: PC13 (Blue Button, Active Low) */
-    GPIOC->MODER &= ~(3UL << (BTN_USER_PIN * 2U)); /* Input mode */
-    GPIOC->PUPDR &= ~(3UL << (BTN_USER_PIN * 2U));
-
     /* 2. Configure Output LED: PA6 (Red LED) */
     GPIOA->MODER &= ~(3UL << (LED_RED_PIN * 2U));
     GPIOA->MODER |=  (1UL << (LED_RED_PIN * 2U)); /* Output mode */
@@ -85,11 +81,6 @@ bool bsp_gpio_read_key3_mi(void)
 bool bsp_gpio_read_key4_sol(void)
 {
     return ((GPIOB->IDR & (1UL << KEY4_SOL_PIN)) == 0U);
-}
-
-bool bsp_gpio_read_btn_user(void)
-{
-    return ((GPIOC->IDR & (1UL << BTN_USER_PIN)) == 0U);
 }
 
 /* Red LED Setter */
