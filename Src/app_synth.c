@@ -16,12 +16,17 @@
 
 /* Named Constants (Rule 5 & Rule 10) */
 #define SYNTH_MAX_SEQUENCE_STEPS    (64U)
-#define SYNTH_NUM_NOTES             (4U)
+#define SYNTH_NUM_NOTES             (8U)
+#define JOY_HIGH_BANK_THRESHOLD     (-350)
 
 #define SYNTH_NOTE_INDEX_DO         (0)
 #define SYNTH_NOTE_INDEX_RE         (1)
 #define SYNTH_NOTE_INDEX_MI         (2)
-#define SYNTH_NOTE_INDEX_SOL        (3)
+#define SYNTH_NOTE_INDEX_FA         (3)
+#define SYNTH_NOTE_INDEX_SOL        (4)
+#define SYNTH_NOTE_INDEX_LA         (5)
+#define SYNTH_NOTE_INDEX_TI         (6)
+#define SYNTH_NOTE_INDEX_HIGH_DO    (7)
 
 #define CHIME_NOTE_C4_FREQ          (262U)
 #define CHIME_NOTE_C6_FREQ          (1047U)
@@ -64,14 +69,14 @@ typedef enum {
 
 /* Recorded Note Step Structure */
 typedef struct {
-    int8_t   note_index;   /* 0: C, 1: D, 2: E, 3: G */
+    int8_t   note_index;   /* 0..7 (Do, Re, Mi, Fa, Sol, La, Ti, High Do) */
     uint16_t duration_ms;  /* Key held duration */
     uint16_t rest_ms;      /* Gap between this note and next note */
 } synth_step_t;
 
-/* Frequency Table for 4 Notes (Octave 7: C7, D7, E7, G7) - Shifted +2 Octaves */
+/* Frequency Table for 8 Notes (C7 to C8: Do, Re, Mi, Fa, Sol, La, Ti, High Do) */
 static const uint32_t NOTE_FREQ[SYNTH_NUM_NOTES] = {
-    2093U, 2349U, 2637U, 3136U
+    2093U, 2349U, 2637U, 2794U, 3136U, 3520U, 3951U, 4186U
 };
 
 /* Sequencer Memory and State */
@@ -319,25 +324,40 @@ static int8_t synth_read_active_note(bool b_k1, bool b_k2, bool b_k3, bool b_k4)
     {
         s1t_active_note = -1; /* Combo held: suppress single-note audio */
     }
-    else if (b_k1 == true)
-    {
-        s1t_active_note = SYNTH_NOTE_INDEX_DO;
-    }
-    else if (b_k2 == true)
-    {
-        s1t_active_note = SYNTH_NOTE_INDEX_RE;
-    }
-    else if (b_k3 == true)
-    {
-        s1t_active_note = SYNTH_NOTE_INDEX_MI;
-    }
-    else if (b_k4 == true)
-    {
-        s1t_active_note = SYNTH_NOTE_INDEX_SOL;
-    }
     else
     {
-        s1t_active_note = -1;
+        int8_t s1t_bank_offset = 0;
+        int32_t s4t_norm_y = bsp_joystick_get_norm_y();
+
+        if (s4t_norm_y <= JOY_HIGH_BANK_THRESHOLD)
+        {
+            s1t_bank_offset = 4; /* High Note Bank: Sol, La, Ti, High Do */
+        }
+        else
+        {
+            s1t_bank_offset = 0; /* Normal Note Bank: Do, Re, Mi, Fa */
+        }
+
+        if (b_k1 == true)
+        {
+            s1t_active_note = (int8_t)(SYNTH_NOTE_INDEX_DO + s1t_bank_offset);
+        }
+        else if (b_k2 == true)
+        {
+            s1t_active_note = (int8_t)(SYNTH_NOTE_INDEX_RE + s1t_bank_offset);
+        }
+        else if (b_k3 == true)
+        {
+            s1t_active_note = (int8_t)(SYNTH_NOTE_INDEX_MI + s1t_bank_offset);
+        }
+        else if (b_k4 == true)
+        {
+            s1t_active_note = (int8_t)(SYNTH_NOTE_INDEX_FA + s1t_bank_offset);
+        }
+        else
+        {
+            s1t_active_note = -1;
+        }
     }
 
     return s1t_active_note;
