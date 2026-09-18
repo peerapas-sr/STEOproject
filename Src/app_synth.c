@@ -34,6 +34,7 @@
 #define STATUS_TONE_NONE_FREQ       (0U)
 
 #define REC_LED_BLINK_PERIOD_MS     (200U)
+#define NOTE_RELEASE_TIME_MS        (250U)
 
 #define PLAYBACK_MIN_GAP_MS         (40U)
 #define MIN_NOTE_DUR_RECORD_MS      (50U)
@@ -93,6 +94,11 @@ static bool             g_b_play_in_note_phase = false;
 
 /* Sound Modulation Trackers */
 static uint32_t         g_u4t_lfo_start_ms = 0U;
+
+/* Release Envelope Trackers */
+static uint32_t         g_u4t_release_start_ms = 0U;
+static int8_t           g_s1t_release_note = -1;
+static bool             g_b_in_release = false;
 
 /* Helper: Sound feedback chimes */
 static void synth_play_status_tone(uint32_t u4t_first_freq, uint32_t u4t_second_freq)
@@ -510,7 +516,11 @@ static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_p
 {
     if (s1t_active_note >= 0)
     {
+        /* Active note pressed: cancel any release tail and play immediately */
+        g_b_in_release = false;
+        g_s1t_release_note = s1t_active_note;
         bsp_gpio_led_red_set(true);
+
         if (s1t_active_note != g_s1t_last_played)
         {
             g_u4t_lfo_start_ms = u4t_now;
@@ -524,18 +534,64 @@ static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_p
     }
     else
     {
-        bsp_buzzer_off();
-        if (g_recorder_mode != RECORDER_RECORDING)
+        /* Key released: handle release decay tail */
+        if ((g_b_in_release == false) && (g_s1t_release_note >= 0))
         {
-            bsp_gpio_led_red_set(false);
+            g_b_in_release = true;
+            g_u4t_release_start_ms = u4t_now;
         }
         else
         {
-            /* Handled by recording blinker */
+            /* Release already initiated or no note was played */
         }
 
-        g_s1t_last_played = -1;
-        bsp_delay_us(1000U);
+        if (g_b_in_release == true)
+        {
+            uint32_t u4t_rel_elapsed = u4t_now - g_u4t_release_start_ms;
+
+            if (u4t_rel_elapsed < NOTE_RELEASE_TIME_MS)
+            {
+                uint32_t u4t_rem_time = NOTE_RELEASE_TIME_MS - u4t_rel_elapsed;
+                uint32_t u4t_fade_vol = ((uint32_t)u1t_volume_pct * u4t_rem_time) / NOTE_RELEASE_TIME_MS;
+
+                bsp_gpio_led_red_set(true);
+                synth_play_note(g_s1t_release_note, (uint8_t)u4t_fade_vol, true, u4t_now);
+            }
+            else
+            {
+                /* Release tail expired */
+                g_b_in_release = false;
+                g_s1t_release_note = -1;
+                g_s1t_last_played = -1;
+                bsp_buzzer_off();
+
+                if (g_recorder_mode != RECORDER_RECORDING)
+                {
+                    bsp_gpio_led_red_set(false);
+                }
+                else
+                {
+                    /* Handled by recording blinker */
+                }
+            }
+        }
+        else
+        {
+            /* Idle: no active note and no release tail */
+            bsp_buzzer_off();
+
+            if (g_recorder_mode != RECORDER_RECORDING)
+            {
+                bsp_gpio_led_red_set(false);
+            }
+            else
+            {
+                /* Handled by recording blinker */
+            }
+
+            g_s1t_last_played = -1;
+            bsp_delay_us(1000U);
+        }
     }
 }
 
