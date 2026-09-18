@@ -513,6 +513,8 @@ void bsp_oled_render_pitch_gauge(int32_t s4t_norm_x)
 
 void bsp_oled_render_piano_keyboard(int8_t s1t_active_key)
 {
+    static const uint8_t BLACK_KEY_X[5] = {12U, 28U, 60U, 76U, 92U};
+
     /* 1. Top and Bottom keyboard borders */
     bsp_oled_draw_hline(0U, 127U, PIANO_BORDER_TOP_Y, true);
     bsp_oled_draw_hline(0U, 127U, PIANO_BORDER_BOT_Y, true);
@@ -530,45 +532,56 @@ void bsp_oled_render_piano_keyboard(int8_t s1t_active_key)
 
         if (b_is_active == true)
         {
-            /* Highlight active key by filling white */
             bsp_oled_fill_rect((uint8_t)(u1t_x0 + 1U), (uint8_t)(PIANO_BORDER_TOP_Y + 1U), (uint8_t)(u1t_x1 - 1U), (uint8_t)(PIANO_BORDER_BOT_Y - 1U), true);
-            /* Inverted text label inside active key (Page 7) */
-            bsp_oled_draw_string((uint8_t)(u1t_x0 + 3U), 7U, KEY_LABELS[u1t_k], true);
         }
         else
         {
-            /* Normal non-inverted text label inside key (Page 7) */
-            bsp_oled_draw_string((uint8_t)(u1t_x0 + 3U), 7U, KEY_LABELS[u1t_k], false);
+            /* Key inactive */
         }
+        bsp_oled_draw_string((uint8_t)(u1t_x0 + 3U), 7U, KEY_LABELS[u1t_k], b_is_active);
     }
 
     /* 3. Black Keys (C#, D#, F#, G#, A#) */
-    /* Black Key 0 (between C & D): X = 12..19 */
-    bsp_oled_fill_rect(12U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), 19U, PIANO_BLACK_KEY_BOT_Y, true);
-    bsp_oled_draw_vline(12U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
-    bsp_oled_draw_vline(19U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
+    for (uint8_t u1t_bk = 0U; u1t_bk < 5U; u1t_bk++)
+    {
+        uint8_t u1t_bx = BLACK_KEY_X[u1t_bk];
+        bsp_oled_fill_rect(u1t_bx, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), (uint8_t)(u1t_bx + 7U), PIANO_BLACK_KEY_BOT_Y, true);
+        bsp_oled_draw_vline(u1t_bx, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
+        bsp_oled_draw_vline((uint8_t)(u1t_bx + 7U), (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
+    }
+}
 
-    /* Black Key 1 (between D & E): X = 28..35 */
-    bsp_oled_fill_rect(28U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), 35U, PIANO_BLACK_KEY_BOT_Y, true);
-    bsp_oled_draw_vline(28U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
-    bsp_oled_draw_vline(35U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
+/* Transmit 1 page (128 bytes) of framebuffer to OLED */
+static void oled_write_page(uint8_t u1t_page)
+{
+    uint16_t u2t_page_offset = (uint16_t)u1t_page * OLED_PAGE_SIZE_BYTES;
 
-    /* Note: No black key between E & F (Key 2 and Key 3) */
+    if (oled_i2c_start(I2C_OLED_SLAVE_ADDR_WRITE) == true)
+    {
+        (void)oled_i2c_write_byte(I2C_CTRL_BYTE_CMD);
+        (void)oled_i2c_write_byte((uint8_t)(SH1106_PAGE_CMD_BASE | u1t_page));
+        (void)oled_i2c_write_byte(SH1106_COL_LOW_OFFSET);
+        (void)oled_i2c_write_byte(SH1106_COL_HIGH_BASE);
+        oled_i2c_stop();
 
-    /* Black Key 2 (between F & G): X = 60..67 */
-    bsp_oled_fill_rect(60U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), 67U, PIANO_BLACK_KEY_BOT_Y, true);
-    bsp_oled_draw_vline(60U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
-    bsp_oled_draw_vline(67U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
-
-    /* Black Key 3 (between G & A): X = 76..83 */
-    bsp_oled_fill_rect(76U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), 83U, PIANO_BLACK_KEY_BOT_Y, true);
-    bsp_oled_draw_vline(76U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
-    bsp_oled_draw_vline(83U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
-
-    /* Black Key 4 (between A & B): X = 92..99 */
-    bsp_oled_fill_rect(92U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), 99U, PIANO_BLACK_KEY_BOT_Y, true);
-    bsp_oled_draw_vline(92U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
-    bsp_oled_draw_vline(99U, (uint8_t)(PIANO_BORDER_TOP_Y + 1U), PIANO_BLACK_KEY_BOT_Y, false);
+        if (oled_i2c_start(I2C_OLED_SLAVE_ADDR_WRITE) == true)
+        {
+            (void)oled_i2c_write_byte(I2C_CTRL_BYTE_DATA);
+            for (uint16_t u2t_col = 0U; u2t_col < OLED_PAGE_SIZE_BYTES; u2t_col++)
+            {
+                (void)oled_i2c_write_byte(g_u1t_oled_buffer[u2t_page_offset + u2t_col]);
+            }
+            oled_i2c_stop();
+        }
+        else
+        {
+            /* Data write skipped on I2C error */
+        }
+    }
+    else
+    {
+        /* Page command skipped on I2C error */
+    }
 }
 
 /* Page-by-Page Refresh Service (Non-blocking: ~2.8 ms per page slice) */
@@ -577,40 +590,8 @@ void bsp_oled_service(uint32_t u4t_now)
     if ((u4t_now - g_u4t_last_service_ms) >= OLED_SERVICE_SLICE_MS)
     {
         g_u4t_last_service_ms = u4t_now;
-
-        uint8_t u1t_page = g_u1t_current_page;
-        uint16_t u2t_page_offset = (uint16_t)u1t_page * OLED_PAGE_SIZE_BYTES;
-
-        /* Set Page and Column Addresses for SH1106 / SSD1306 */
-        if (oled_i2c_start(I2C_OLED_SLAVE_ADDR_WRITE) == true)
-        {
-            (void)oled_i2c_write_byte(I2C_CTRL_BYTE_CMD);
-            (void)oled_i2c_write_byte((uint8_t)(SH1106_PAGE_CMD_BASE | u1t_page));
-            (void)oled_i2c_write_byte(SH1106_COL_LOW_OFFSET);
-            (void)oled_i2c_write_byte(SH1106_COL_HIGH_BASE);
-            oled_i2c_stop();
-
-            /* Stream 128 bytes of data for this page */
-            if (oled_i2c_start(I2C_OLED_SLAVE_ADDR_WRITE) == true)
-            {
-                (void)oled_i2c_write_byte(I2C_CTRL_BYTE_DATA);
-                for (uint16_t u2t_col = 0U; u2t_col < OLED_PAGE_SIZE_BYTES; u2t_col++)
-                {
-                    (void)oled_i2c_write_byte(g_u1t_oled_buffer[u2t_page_offset + u2t_col]);
-                }
-                oled_i2c_stop();
-            }
-            else
-            {
-                /* Data write skipped on I2C error */
-            }
-        }
-        else
-        {
-            /* Page command skipped on I2C error */
-        }
-
-        g_u1t_current_page = (g_u1t_current_page + 1U) % OLED_NUM_PAGES;
+        oled_write_page(g_u1t_current_page);
+        g_u1t_current_page = (uint8_t)((g_u1t_current_page + 1U) % OLED_NUM_PAGES);
     }
     else
     {
@@ -695,23 +676,6 @@ void bsp_oled_init(void)
     /* 7. Flush Entire Buffer once at startup so screen lights up immediately */
     for (uint8_t u1t_p = 0U; u1t_p < OLED_NUM_PAGES; u1t_p++)
     {
-        uint16_t u2t_p_off = (uint16_t)u1t_p * OLED_PAGE_SIZE_BYTES;
-        oled_send_command((uint8_t)(SH1106_PAGE_CMD_BASE | u1t_p));
-        oled_send_command(SH1106_COL_LOW_OFFSET);
-        oled_send_command(SH1106_COL_HIGH_BASE);
-
-        if (oled_i2c_start(I2C_OLED_SLAVE_ADDR_WRITE) == true)
-        {
-            (void)oled_i2c_write_byte(I2C_CTRL_BYTE_DATA);
-            for (uint16_t u2t_c = 0U; u2t_c < OLED_PAGE_SIZE_BYTES; u2t_c++)
-            {
-                (void)oled_i2c_write_byte(g_u1t_oled_buffer[u2t_p_off + u2t_c]);
-            }
-            oled_i2c_stop();
-        }
-        else
-        {
-            /* Error handled */
-        }
+        oled_write_page(u1t_p);
     }
 }
