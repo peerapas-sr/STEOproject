@@ -827,5 +827,7 @@ void app_synth_run(void)
 
         /* Update OLED Virtual Piano and Stream display slice */
         synth_update_display(u4t_now, s1t_active_note, u1t_volume_pct);
+
+        bsp_delay_us(1000U);
     }
 }
