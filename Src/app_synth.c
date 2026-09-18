@@ -36,7 +36,7 @@
 #define STATUS_TONE_NONE_FREQ       (0U)
 
 #define REC_LED_BLINK_PERIOD_MS     (200U)
-#define NOTE_RELEASE_TIME_MS        (250U)
+#define KEY_LOCKOUT_MS              (20U)
 #define COMBO_HOLD_MS               (600U)
 #define UART_NOTE_TRIGGER_DUR_MS    (300U)
 
@@ -105,11 +105,12 @@ static uint16_t         g_u2t_play_current_step = 0U;
 static uint32_t         g_u4t_play_step_start_ms = 0U;
 static bool             g_b_play_in_note_phase = false;
 
-/* Sound Modulation & Envelope Trackers */
+/* Sound Modulation Tracker */
 static uint32_t         g_u4t_lfo_start_ms = 0U;
-static uint32_t         g_u4t_release_start_ms = 0U;
-static int8_t           g_s1t_release_note = -1;
-static bool             g_b_in_release = false;
+
+/* Key Debounce Trackers (Leading-edge zero-latency with 20ms bounce lockout) */
+static bool             g_b_key_state[4] = {false, false, false, false};
+static uint32_t         g_u4t_key_lockout_ms[4] = {0U, 0U, 0U, 0U};
 
 /* Breadboard Combos (K1+K4: Rec, K2+K3: Play) */
 static uint32_t         g_u4t_combo_rec_start_ms = 0U;
@@ -310,6 +311,41 @@ static void synth_cmd_short_press(uint32_t u4t_now)
     {
         synth_cmd_toggle_playback();
     }
+}
+
+/* Helper: Debounce 4 Piano Keys with asymmetric leading-edge and bounce lockout */
+static void synth_debounce_keys(uint32_t u4t_now, bool *p_k1, bool *p_k2, bool *p_k3, bool *p_k4)
+{
+    bool b_raw[4];
+    b_raw[0] = *p_k1;
+    b_raw[1] = *p_k2;
+    b_raw[2] = *p_k3;
+    b_raw[3] = *p_k4;
+
+    for (uint8_t u1t_i = 0U; u1t_i < 4U; u1t_i++)
+    {
+        if (b_raw[u1t_i] != g_b_key_state[u1t_i])
+        {
+            if ((u4t_now - g_u4t_key_lockout_ms[u1t_i]) >= KEY_LOCKOUT_MS)
+            {
+                g_b_key_state[u1t_i] = b_raw[u1t_i];
+                g_u4t_key_lockout_ms[u1t_i] = u4t_now;
+            }
+            else
+            {
+                /* In lockout period: suppress contact bounce glitch */
+            }
+        }
+        else
+        {
+            /* Key state steady */
+        }
+    }
+
+    *p_k1 = g_b_key_state[0];
+    *p_k2 = g_b_key_state[1];
+    *p_k3 = g_b_key_state[2];
+    *p_k4 = g_b_key_state[3];
 }
 
 /* Helper: Compact combo hold timer updater */
@@ -674,8 +710,6 @@ static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_p
 {
     if (s1t_active_note >= 0)
     {
-        g_b_in_release = false;
-        g_s1t_release_note = s1t_active_note;
         bsp_gpio_led_red_set(true);
 
         if (s1t_active_note != g_s1t_last_played)
@@ -686,64 +720,22 @@ static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_p
         }
         else
         {
-            /* Continues */
+            /* Note continues */
         }
         synth_play_note(s1t_active_note, u1t_volume_pct, true, u4t_now);
     }
     else
     {
-        if ((g_b_in_release == false) && (g_s1t_release_note >= 0))
+        bsp_buzzer_off();
+        if (g_recorder_mode != RECORDER_RECORDING)
         {
-            g_b_in_release = true;
-            g_u4t_release_start_ms = u4t_now;
+            bsp_gpio_led_red_set(false);
         }
         else
         {
-            /* Release state unchanged */
+            /* Keep blinking during recording */
         }
-
-        if (g_b_in_release == true)
-        {
-            uint32_t u4t_rel_elapsed = u4t_now - g_u4t_release_start_ms;
-
-            if (u4t_rel_elapsed < NOTE_RELEASE_TIME_MS)
-            {
-                uint32_t u4t_rem_time = NOTE_RELEASE_TIME_MS - u4t_rel_elapsed;
-                uint32_t u4t_fade_vol = ((uint32_t)u1t_volume_pct * u4t_rem_time) / NOTE_RELEASE_TIME_MS;
-
-                bsp_gpio_led_red_set(true);
-                synth_play_note(g_s1t_release_note, (uint8_t)u4t_fade_vol, true, u4t_now);
-            }
-            else
-            {
-                g_b_in_release = false;
-                g_s1t_release_note = -1;
-                g_s1t_last_played = -1;
-                bsp_buzzer_off();
-
-                if (g_recorder_mode != RECORDER_RECORDING)
-                {
-                    bsp_gpio_led_red_set(false);
-                }
-                else
-                {
-                    /* Blinking */
-                }
-            }
-        }
-        else
-        {
-            bsp_buzzer_off();
-            if (g_recorder_mode != RECORDER_RECORDING)
-            {
-                bsp_gpio_led_red_set(false);
-            }
-            else
-            {
-                /* Blinking */
-            }
-            g_s1t_last_played = -1;
-        }
+        g_s1t_last_played = -1;
     }
 }
 
@@ -790,18 +782,7 @@ static void synth_update_display(uint32_t u4t_now, int8_t s1t_active_note, uint8
         else
         {
             p_mode_str = "[LIVE]";
-            if (s1t_active_note >= 0)
-            {
-                s1t_display_key = s1t_active_note;
-            }
-            else if (g_b_in_release == true)
-            {
-                s1t_display_key = g_s1t_release_note;
-            }
-            else
-            {
-                s1t_display_key = -1;
-            }
+            s1t_display_key = s1t_active_note;
         }
 
         bsp_oled_clear_buffer();
@@ -918,11 +899,13 @@ void app_synth_run(void)
             /* No switch event */
         }
 
-        /* Read 4 Piano Keys */
+        /* Read 4 Piano Keys with Zero-Latency Debounce Filter */
         bool b_k1 = bsp_gpio_read_key1();
         bool b_k2 = bsp_gpio_read_key2();
         bool b_k3 = bsp_gpio_read_key3();
         bool b_k4 = bsp_gpio_read_key4();
+
+        synth_debounce_keys(u4t_now, &b_k1, &b_k2, &b_k3, &b_k4);
 
         synth_check_combo(u4t_now, b_k1, b_k2, b_k3, b_k4);
 

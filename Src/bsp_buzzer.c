@@ -91,6 +91,8 @@ void bsp_buzzer_off(void)
 {
     g_b_buzzer_is_active = false;
     TIM4->CR1 &= ~TIM_CR1_CEN;
+    TIM4->SR &= ~TIM_SR_UIF;
+    TIM4->CNT = 0U;
     GPIOC->BSRR = (1UL << (BUZZER_PIN + 16U)); /* Atomic LOW */
     g_b_buzzer_pin_state = false;
 }
