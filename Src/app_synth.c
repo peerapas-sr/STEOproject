@@ -81,11 +81,22 @@ static const uint32_t NOTE_FREQ[SYNTH_NUM_NOTES] = {
     2093U, 2349U, 2637U, 2794U, 3136U, 3520U, 3951U, 4186U
 };
 
+/* Note Names for UART Logging & Communication */
+static const char *NOTE_NAMES[SYNTH_NUM_NOTES] = {
+    "C7 (DO)", "D7 (RE)", "E7 (MI)", "F7 (FA)",
+    "G7 (SO)", "A7 (LA)", "B7 (TI)", "C8 (DO+)"
+};
+
 /* Sequencer Memory and State */
 static synth_step_t     g_sequence[SYNTH_MAX_SEQUENCE_STEPS];
 static uint16_t         g_u2t_seq_count = 0U;
 static recorder_mode_t  g_recorder_mode = RECORDER_IDLE;
 static int8_t           g_s1t_last_played = -1;
+
+/* UART RX Command State & Playback Tracker */
+static int8_t           g_s1t_uart_note = -1;
+static uint32_t         g_u4t_uart_note_start_ms = 0U;
+static uint16_t         g_u2t_last_logged_play_step = 0xFFFFU;
 
 /* Recording Trackers */
 static uint32_t         g_u4t_rec_note_start_ms = 0U;
@@ -113,6 +124,33 @@ static uint32_t         g_u4t_combo_rec_start_ms = 0U;
 static bool             g_b_combo_rec_taken = false;
 static uint32_t         g_u4t_combo_play_start_ms = 0U;
 static bool             g_b_combo_play_taken = false;
+
+/* Helper: Send unsigned decimal number over UART */
+static void synth_uart_send_dec(uint32_t u4t_val)
+{
+    char buf[12];
+    int32_t s4t_idx = 0;
+    uint32_t u4t_rem = u4t_val;
+
+    if (u4t_rem == 0U)
+    {
+        bsp_uart_send_char('0');
+    }
+    else
+    {
+        while ((u4t_rem > 0U) && (s4t_idx < 11))
+        {
+            buf[s4t_idx] = (char)('0' + (u4t_rem % 10U));
+            s4t_idx++;
+            u4t_rem = u4t_rem / 10U;
+        }
+
+        for (int32_t s4t_i = s4t_idx - 1; s4t_i >= 0; s4t_i--)
+        {
+            bsp_uart_send_char(buf[s4t_i]);
+        }
+    }
+}
 
 /* Helper: Sound feedback chimes */
 static void synth_play_status_tone(uint32_t u4t_first_freq, uint32_t u4t_second_freq)
@@ -169,6 +207,21 @@ static void synth_seq_append_step(uint32_t u4t_now, uint16_t u2t_rest_ms)
             g_sequence[g_u2t_seq_count].duration_ms = (uint16_t)u4t_dur;
             g_sequence[g_u2t_seq_count].rest_ms = u2t_rest_ms;
             g_u2t_seq_count++;
+
+            bsp_uart_send_string("[RECORDER] Step ");
+            synth_uart_send_dec((uint32_t)g_u2t_seq_count);
+            bsp_uart_send_string(": ");
+            if ((g_s1t_rec_current_note >= 0) && (g_s1t_rec_current_note < (int8_t)SYNTH_NUM_NOTES))
+            {
+                bsp_uart_send_string(NOTE_NAMES[g_s1t_rec_current_note]);
+            }
+            else
+            {
+                bsp_uart_send_string("UNKNOWN");
+            }
+            bsp_uart_send_string(" (");
+            synth_uart_send_dec(u4t_dur);
+            bsp_uart_send_string(" ms)\r\n");
         }
         else
         {
@@ -191,7 +244,9 @@ static void synth_seq_stop_recording(uint32_t u4t_now)
     bsp_buzzer_off();
     bsp_gpio_led_red_set(false);
     synth_play_status_tone(CHIME_NOTE_G6_FREQ, CHIME_NOTE_C6_FREQ);
-    bsp_uart_send_string("[RECORDER] Stopped & Saved!\r\n");
+    bsp_uart_send_string("[RECORDER] Stopped & Saved! Total steps: ");
+    synth_uart_send_dec((uint32_t)g_u2t_seq_count);
+    bsp_uart_send_string("\r\n");
 }
 
 static void synth_seq_start_playback(void)
@@ -199,22 +254,26 @@ static void synth_seq_start_playback(void)
     if (g_u2t_seq_count == 0U)
     {
         synth_play_status_tone(CHIME_NOTE_C4_FREQ, STATUS_TONE_NONE_FREQ);
-        bsp_uart_send_string("[PLAYBACK] Memory empty!\r\n");
+        bsp_uart_send_string("[PLAYBACK] Memory empty! Hold K1+K4 to record first.\r\n");
     }
     else
     {
         synth_play_status_tone(NOTE_FREQ[SYNTH_NOTE_INDEX_SOL], STATUS_TONE_NONE_FREQ);
         g_recorder_mode = RECORDER_PLAYING;
         g_u2t_play_current_step = 0U;
+        g_u2t_last_logged_play_step = 0xFFFFU;
         g_b_play_in_note_phase = true;
         g_u4t_play_step_start_ms = bsp_timer_get_ms();
-        bsp_uart_send_string("[PLAYBACK] Playing...\r\n");
+        bsp_uart_send_string("[PLAYBACK] Playing ");
+        synth_uart_send_dec((uint32_t)g_u2t_seq_count);
+        bsp_uart_send_string(" recorded notes...\r\n");
     }
 }
 
 static void synth_seq_stop_playback(void)
 {
     g_recorder_mode = RECORDER_IDLE;
+    g_u2t_last_logged_play_step = 0xFFFFU;
     bsp_buzzer_off();
     bsp_gpio_led_red_set(false);
     bsp_uart_send_string("[PLAYBACK] Stopped!\r\n");
@@ -355,6 +414,19 @@ static int8_t synth_read_active_note(bool b_k1, bool b_k2, bool b_k3, bool b_k4)
         else if (b_k4 == true)
         {
             s1t_active_note = (int8_t)(SYNTH_NOTE_INDEX_FA + s1t_bank_offset);
+        }
+        else if (g_s1t_uart_note >= 0)
+        {
+            uint32_t u4t_now = bsp_timer_get_ms();
+            if ((u4t_now - g_u4t_uart_note_start_ms) < 300U)
+            {
+                s1t_active_note = g_s1t_uart_note;
+            }
+            else
+            {
+                g_s1t_uart_note = -1;
+                s1t_active_note = -1;
+            }
         }
         else
         {
@@ -548,6 +620,29 @@ static void synth_update_playback(uint32_t u4t_now, int8_t s1t_active_note, uint
             bsp_gpio_led_red_set(true);
             synth_play_note(step->note_index, u1t_volume_pct, false, 0U);
 
+            if (g_u2t_play_current_step != g_u2t_last_logged_play_step)
+            {
+                g_u2t_last_logged_play_step = g_u2t_play_current_step;
+                bsp_uart_send_string("[PLAYBACK] Step ");
+                synth_uart_send_dec((uint32_t)(g_u2t_play_current_step + 1U));
+                bsp_uart_send_string(": ");
+                if ((step->note_index >= 0) && (step->note_index < (int8_t)SYNTH_NUM_NOTES))
+                {
+                    bsp_uart_send_string(NOTE_NAMES[step->note_index]);
+                }
+                else
+                {
+                    bsp_uart_send_string("UNKNOWN");
+                }
+                bsp_uart_send_string(" (");
+                synth_uart_send_dec((uint32_t)step->duration_ms);
+                bsp_uart_send_string(" ms)\r\n");
+            }
+            else
+            {
+                /* Already logged */
+            }
+
             if (u4t_elapsed >= (uint32_t)step->duration_ms)
             {
                 g_b_play_in_note_phase = false;
@@ -611,6 +706,23 @@ static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_p
         {
             g_u4t_lfo_start_ms = u4t_now;
             g_s1t_last_played = s1t_active_note;
+
+            /* Transmit note to Computer via UART (115200 bps) */
+            bsp_uart_send_string("[KEY] Playing: ");
+            if ((s1t_active_note >= 0) && (s1t_active_note < (int8_t)SYNTH_NUM_NOTES))
+            {
+                bsp_uart_send_string(NOTE_NAMES[s1t_active_note]);
+                bsp_uart_send_string(" (");
+                synth_uart_send_dec(NOTE_FREQ[s1t_active_note]);
+                bsp_uart_send_string(" Hz)");
+            }
+            else
+            {
+                bsp_uart_send_string("UNKNOWN");
+            }
+            bsp_uart_send_string(" | Vol: ");
+            synth_uart_send_dec((uint32_t)u1t_volume_pct);
+            bsp_uart_send_string("%\r\n");
         }
         else
         {
@@ -752,9 +864,60 @@ static void synth_update_display(uint32_t u4t_now, int8_t s1t_active_note, uint8
     bsp_oled_service(u4t_now);
 }
 
+/* Process Incoming UART Serial Commands */
+static void synth_handle_uart_rx(uint32_t u4t_now)
+{
+    while (bsp_uart_has_rx_char() == true)
+    {
+        char c = bsp_uart_get_rx_char();
+
+        if ((c >= '1') && (c <= '8'))
+        {
+            int8_t s1t_note = (int8_t)(c - '1');
+            g_s1t_uart_note = s1t_note;
+            g_u4t_uart_note_start_ms = u4t_now;
+
+            bsp_uart_send_string("[CMD] Trigger Note: ");
+            bsp_uart_send_string(NOTE_NAMES[s1t_note]);
+            bsp_uart_send_string("\r\n");
+        }
+        else if ((c == 'r') || (c == 'R'))
+        {
+            synth_cmd_toggle_recording(u4t_now);
+        }
+        else if ((c == 'p') || (c == 'P'))
+        {
+            synth_cmd_toggle_playback();
+        }
+        else if ((c == 'c') || (c == 'C'))
+        {
+            g_u2t_seq_count = 0U;
+            bsp_uart_send_string("[RECORDER] Memory cleared!\r\n");
+        }
+        else if (c == '?')
+        {
+            bsp_uart_send_string("\r\n===================================================\r\n");
+            bsp_uart_send_string("  STM32 Synthesizer Serial Commands (115200 bps)\r\n");
+            bsp_uart_send_string("===================================================\r\n");
+            bsp_uart_send_string("  '1'..'8' : Play Note (Do..C8)\r\n");
+            bsp_uart_send_string("  'r'/'R'  : Toggle Recording (Start / Stop)\r\n");
+            bsp_uart_send_string("  'p'/'P'  : Toggle Playback (Play / Stop)\r\n");
+            bsp_uart_send_string("  'c'/'C'  : Clear Sequence Memory\r\n");
+            bsp_uart_send_string("  '?'      : Show this Help Menu\r\n\r\n");
+        }
+        else
+        {
+            /* Ignore unrecognized characters */
+        }
+    }
+}
+
 void app_synth_init(void)
 {
-    bsp_uart_send_string("[SYNTH] Ready (Octave 7 + HW-504 Joystick)\r\n");
+    bsp_uart_send_string("\r\n===================================================\r\n");
+    bsp_uart_send_string("  STM32 Synthesizer (Octave 7-8 Diatonic + OLED)\r\n");
+    bsp_uart_send_string("  Type '?' in Serial Monitor for Help | 115200 bps\r\n");
+    bsp_uart_send_string("===================================================\r\n");
 
     /* Startup Welcome Chime: C7 -> E7 -> G7 */
     bsp_buzzer_play_chunk(NOTE_FREQ[SYNTH_NOTE_INDEX_DO], CHIME_NOTE_VOL_RAW);
@@ -763,6 +926,7 @@ void app_synth_init(void)
     bsp_delay_ms(CHIME_DELAY_SHORT_MS);
     bsp_buzzer_play_chunk(NOTE_FREQ[SYNTH_NOTE_INDEX_SOL], CHIME_NOTE_VOL_FINAL);
     bsp_delay_ms(CHIME_DELAY_LONG_MS);
+    bsp_buzzer_off();
 }
 
 void app_synth_run(void)
@@ -786,6 +950,7 @@ void app_synth_run(void)
         /* Periodic Services */
         bsp_adc_service(u4t_now);
         bsp_joystick_service(u4t_now);
+        synth_handle_uart_rx(u4t_now);
 
         /* Process Joystick Switch Events */
         joy_evt = bsp_joystick_get_event();
