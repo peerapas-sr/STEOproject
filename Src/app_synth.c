@@ -35,6 +35,7 @@
 
 #define REC_LED_BLINK_PERIOD_MS     (200U)
 #define NOTE_RELEASE_TIME_MS        (250U)
+#define COMBO_HOLD_MS               (600U)
 
 #define PLAYBACK_MIN_GAP_MS         (40U)
 #define MIN_NOTE_DUR_RECORD_MS      (50U)
@@ -99,6 +100,12 @@ static uint32_t         g_u4t_lfo_start_ms = 0U;
 static uint32_t         g_u4t_release_start_ms = 0U;
 static int8_t           g_s1t_release_note = -1;
 static bool             g_b_in_release = false;
+
+/* Breadboard Combos (K1+K4: Rec, K2+K3: Play) */
+static uint32_t         g_u4t_combo_rec_start_ms = 0U;
+static bool             g_b_combo_rec_taken = false;
+static uint32_t         g_u4t_combo_play_start_ms = 0U;
+static bool             g_b_combo_play_taken = false;
 
 /* Helper: Sound feedback chimes */
 static void synth_play_status_tone(uint32_t u4t_first_freq, uint32_t u4t_second_freq)
@@ -251,23 +258,80 @@ static void synth_cmd_short_press(uint32_t u4t_now)
     }
 }
 
-static int8_t synth_read_active_note(void)
+/* Helper: Process breadboard 2-key combos (K1+K4: Record, K2+K3: Play) */
+static void synth_check_combo(uint32_t u4t_now, bool b_k1, bool b_k2, bool b_k3, bool b_k4)
+{
+    bool b_rec_combo = ((b_k1 == true) && (b_k4 == true));
+    bool b_play_combo = ((b_k2 == true) && (b_k3 == true));
+
+    if (b_rec_combo == true)
+    {
+        if (g_u4t_combo_rec_start_ms == 0U)
+        {
+            g_u4t_combo_rec_start_ms = u4t_now;
+            g_b_combo_rec_taken = false;
+        }
+        else if (((u4t_now - g_u4t_combo_rec_start_ms) >= COMBO_HOLD_MS) && (g_b_combo_rec_taken == false))
+        {
+            g_b_combo_rec_taken = true;
+            synth_cmd_toggle_recording(u4t_now);
+        }
+        else
+        {
+            /* Holding combo */
+        }
+    }
+    else
+    {
+        g_u4t_combo_rec_start_ms = 0U;
+        g_b_combo_rec_taken = false;
+    }
+
+    if (b_play_combo == true)
+    {
+        if (g_u4t_combo_play_start_ms == 0U)
+        {
+            g_u4t_combo_play_start_ms = u4t_now;
+            g_b_combo_play_taken = false;
+        }
+        else if (((u4t_now - g_u4t_combo_play_start_ms) >= COMBO_HOLD_MS) && (g_b_combo_play_taken == false))
+        {
+            g_b_combo_play_taken = true;
+            synth_cmd_toggle_playback();
+        }
+        else
+        {
+            /* Holding combo */
+        }
+    }
+    else
+    {
+        g_u4t_combo_play_start_ms = 0U;
+        g_b_combo_play_taken = false;
+    }
+}
+
+static int8_t synth_read_active_note(bool b_k1, bool b_k2, bool b_k3, bool b_k4)
 {
     int8_t s1t_active_note = -1;
 
-    if (bsp_gpio_read_key1_do() == true)
+    if (((b_k1 == true) && (b_k4 == true)) || ((b_k2 == true) && (b_k3 == true)))
+    {
+        s1t_active_note = -1; /* Combo held: suppress single-note audio */
+    }
+    else if (b_k1 == true)
     {
         s1t_active_note = SYNTH_NOTE_INDEX_DO;
     }
-    else if (bsp_gpio_read_key2_re() == true)
+    else if (b_k2 == true)
     {
         s1t_active_note = SYNTH_NOTE_INDEX_RE;
     }
-    else if (bsp_gpio_read_key3_mi() == true)
+    else if (b_k3 == true)
     {
         s1t_active_note = SYNTH_NOTE_INDEX_MI;
     }
-    else if (bsp_gpio_read_key4_sol() == true)
+    else if (b_k4 == true)
     {
         s1t_active_note = SYNTH_NOTE_INDEX_SOL;
     }
@@ -645,7 +709,16 @@ void app_synth_run(void)
             /* No switch event */
         }
 
-        s1t_active_note = synth_read_active_note();
+        /* Read 4 Piano Keys */
+        bool b_k1 = bsp_gpio_read_key1_do();
+        bool b_k2 = bsp_gpio_read_key2_re();
+        bool b_k3 = bsp_gpio_read_key3_mi();
+        bool b_k4 = bsp_gpio_read_key4_sol();
+
+        /* Process Breadboard Combos (K1+K4: Record, K2+K3: Play) */
+        synth_check_combo(u4t_now, b_k1, b_k2, b_k3, b_k4);
+
+        s1t_active_note = synth_read_active_note(b_k1, b_k2, b_k3, b_k4);
         u1t_volume_pct = bsp_adc_get_volume_percent();
 
         synth_update_recording(u4t_now, s1t_active_note);
