@@ -13,11 +13,13 @@
 #include "bsp_uart.h"
 #include "bsp_buzzer.h"
 #include "bsp_timer.h"
+#include "bsp_oled.h"
 
 /* Named Constants (Rule 5 & Rule 10) */
 #define SYNTH_MAX_SEQUENCE_STEPS    (64U)
 #define SYNTH_NUM_NOTES             (8U)
 #define JOY_HIGH_BANK_THRESHOLD     (-350)
+#define OLED_RENDER_INTERVAL_MS     (30U)
 
 #define SYNTH_NOTE_INDEX_DO         (0)
 #define SYNTH_NOTE_INDEX_RE         (1)
@@ -679,6 +681,77 @@ static void synth_update_live_sound(int8_t s1t_active_note, uint8_t u1t_volume_p
     }
 }
 
+/* Update OLED Virtual Piano Interface and refresh screen slices */
+static void synth_update_display(uint32_t u4t_now, int8_t s1t_active_note, uint8_t u1t_volume_pct)
+{
+    static uint32_t u4t_last_render_ms = 0U;
+
+    if ((u4t_now - u4t_last_render_ms) >= OLED_RENDER_INTERVAL_MS)
+    {
+        u4t_last_render_ms = u4t_now;
+
+        int32_t s4t_norm_x = bsp_joystick_get_norm_x();
+        int32_t s4t_norm_y = bsp_joystick_get_norm_y();
+        bool b_high_bank = (s4t_norm_y <= JOY_HIGH_BANK_THRESHOLD);
+        int32_t s4t_cents = (s4t_norm_x * BEND_MAX_CENTS) / 1000;
+        int8_t s1t_display_key = -1;
+        const char *p_mode_str = "[LIVE]";
+
+        if (g_recorder_mode == RECORDER_RECORDING)
+        {
+            if (g_b_rec_blink_led_state == true)
+            {
+                p_mode_str = "[REC]";
+            }
+            else
+            {
+                p_mode_str = "[   ]";
+            }
+            s1t_display_key = s1t_active_note;
+        }
+        else if (g_recorder_mode == RECORDER_PLAYING)
+        {
+            p_mode_str = "[PLAY]";
+            if (g_b_play_in_note_phase == true)
+            {
+                s1t_display_key = g_sequence[g_u2t_play_current_step].note_index;
+            }
+            else
+            {
+                s1t_display_key = -1;
+            }
+        }
+        else
+        {
+            p_mode_str = "[LIVE]";
+            if (s1t_active_note >= 0)
+            {
+                s1t_display_key = s1t_active_note;
+            }
+            else if (g_b_in_release == true)
+            {
+                s1t_display_key = g_s1t_release_note;
+            }
+            else
+            {
+                s1t_display_key = -1;
+            }
+        }
+
+        bsp_oled_clear_buffer();
+        bsp_oled_render_header(p_mode_str, b_high_bank, u1t_volume_pct, s1t_display_key, s4t_cents);
+        bsp_oled_render_pitch_gauge(s4t_norm_x);
+        bsp_oled_render_piano_keyboard(s1t_display_key);
+    }
+    else
+    {
+        /* Refresh interval not elapsed */
+    }
+
+    /* Stream 1 page slice (~2.8 ms) to OLED display */
+    bsp_oled_service(u4t_now);
+}
+
 void app_synth_init(void)
 {
     bsp_uart_send_string("[SYNTH] Ready (Octave 7 + HW-504 Joystick)\r\n");
@@ -751,5 +824,8 @@ void app_synth_run(void)
         {
             synth_update_live_sound(s1t_active_note, u1t_volume_pct, u4t_now);
         }
+
+        /* Update OLED Virtual Piano and Stream display slice */
+        synth_update_display(u4t_now, s1t_active_note, u1t_volume_pct);
     }
 }

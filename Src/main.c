@@ -24,6 +24,7 @@
 #include "bsp_buzzer.h"
 #include "bsp_joystick.h"
 #include "bsp_timer.h"
+#include "bsp_oled.h"
 #include "app_synth.h"
 
 /* System Clock definition required by CMSIS */
@@ -43,6 +44,7 @@ int main(void)
     bsp_joystick_init(); /* HW-504 Dual-Axis Joystick Driver */
     bsp_uart_init();     /* USART2 with RXNE Interrupt (No Polling) */
     bsp_timer_init();    /* TIM3 1ms Hardware Timer Interrupt */
+    bsp_oled_init();     /* 1.30" I2C OLED (PB8 SCL, PB9 SDA) */
 
     /* 2. Initialize and Run Main Synthesizer Application Layer */
     app_synth_init();
