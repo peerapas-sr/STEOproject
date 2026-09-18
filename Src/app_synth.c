@@ -968,10 +968,10 @@ void app_synth_run(void)
         }
 
         /* Read 4 Piano Keys */
-        bool b_k1 = bsp_gpio_read_key1_do();
-        bool b_k2 = bsp_gpio_read_key2_re();
-        bool b_k3 = bsp_gpio_read_key3_mi();
-        bool b_k4 = bsp_gpio_read_key4_sol();
+        bool b_k1 = bsp_gpio_read_key1();
+        bool b_k2 = bsp_gpio_read_key2();
+        bool b_k3 = bsp_gpio_read_key3();
+        bool b_k4 = bsp_gpio_read_key4();
 
         /* Process Breadboard Combos (K1+K4: Record, K2+K3: Play) */
         synth_check_combo(u4t_now, b_k1, b_k2, b_k3, b_k4);

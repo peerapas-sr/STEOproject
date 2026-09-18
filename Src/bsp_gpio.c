@@ -1,11 +1,11 @@
 /*******************************************************************************
  * File Name   : bsp_gpio.c
  * Description : Board Support Package - 4 Independent Push Buttons Implementation
- *               - Key 1: PA10 [ซ้ายสุด] with EXTI10 Interrupt
- *               - Key 2: PB3
- *               - Key 3: PB5
- *               - Key 4: PB4
- * Target MCU  : STM32F411RET6
+ *               - Key 1: PA10 [Key 1: Do / Sol] with EXTI10 Interrupt
+ *               - Key 2: PB3  [Key 2: Re / La]
+ *               - Key 3: PB5  [Key 3: Mi / Ti]
+ *               - Key 4: PB4  [Key 4: Fa / High Do]
+ * Target MCU  : STM32F411RET6 (Nucleo-F411RE)
  * Standard    : Toyota Embedded MISRA-C Compliant (22 Rules)
  ******************************************************************************/
 
@@ -34,32 +34,32 @@ void bsp_gpio_init(void)
     GPIOA->PUPDR &= ~(3UL << (LED_RED_PIN * 2U)); /* No pull */
     GPIOA->ODR &= ~(1UL << LED_RED_PIN);          /* Start OFF */
 
-    /* 3. Configure Input Key 1: PA10 [ปุ่มซ้ายสุด / D2] (Pull-up) */
-    GPIOA->MODER &= ~(3UL << (KEY1_DO_PIN * 2U)); /* Input mode */
-    GPIOA->PUPDR &= ~(3UL << (KEY1_DO_PIN * 2U));
-    GPIOA->PUPDR |=  (1UL << (KEY1_DO_PIN * 2U)); /* Pull-up */
+    /* 3. Configure Input Key 1: PA10 (Pull-up) */
+    GPIOA->MODER &= ~(3UL << (KEY1_PIN * 2U));    /* Input mode */
+    GPIOA->PUPDR &= ~(3UL << (KEY1_PIN * 2U));
+    GPIOA->PUPDR |=  (1UL << (KEY1_PIN * 2U));    /* Pull-up */
 
     /* 4. Configure Input Keys 2, 3, 4: PB3, PB5, PB4 (Pull-up) */
-    GPIOB->MODER &= ~((3UL << (KEY2_RE_PIN * 2U)) |
-                      (3UL << (KEY3_MI_PIN * 2U)) |
-                      (3UL << (KEY4_SOL_PIN * 2U)));
-    GPIOB->PUPDR &= ~((3UL << (KEY2_RE_PIN * 2U)) |
-                      (3UL << (KEY3_MI_PIN * 2U)) |
-                      (3UL << (KEY4_SOL_PIN * 2U)));
-    GPIOB->PUPDR |=  ((1UL << (KEY2_RE_PIN * 2U)) |
-                      (1UL << (KEY3_MI_PIN * 2U)) |
-                      (1UL << (KEY4_SOL_PIN * 2U)));
+    GPIOB->MODER &= ~((3UL << (KEY2_PIN * 2U)) |
+                      (3UL << (KEY3_PIN * 2U)) |
+                      (3UL << (KEY4_PIN * 2U)));
+    GPIOB->PUPDR &= ~((3UL << (KEY2_PIN * 2U)) |
+                      (3UL << (KEY3_PIN * 2U)) |
+                      (3UL << (KEY4_PIN * 2U)));
+    GPIOB->PUPDR |=  ((1UL << (KEY2_PIN * 2U)) |
+                      (1UL << (KEY3_PIN * 2U)) |
+                      (1UL << (KEY4_PIN * 2U)));
 
     /* 5. Configure HW-504 Joystick Center Switch: PC2 (Pull-up) */
     GPIOC->MODER &= ~(3UL << (JOY_SW_PIN * 2U));
     GPIOC->PUPDR &= ~(3UL << (JOY_SW_PIN * 2U));
     GPIOC->PUPDR |=  (1UL << (JOY_SW_PIN * 2U));
 
-    /* 6. Configure External Interrupt (EXTI) Line 10 on PA10 [ปุ่มซ้ายสุด] */
+    /* 6. Configure External Interrupt (EXTI) Line 10 on PA10 */
     SYSCFG->EXTICR[2] &= ~(0x0FUL << (2U * 4U)); /* 0x0 = Port A on Line 10 */
 
     EXTI->IMR  |= EXTI_LINE_10_MASK;              /* Unmask Line 10 */
-    EXTI->FTSR |= EXTI_LINE_10_MASK;              /* Falling Edge Trigger (Active Low press) */
+    EXTI->FTSR |= EXTI_LINE_10_MASK;              /* Falling Edge Trigger (Active Low) */
     EXTI->RTSR &= ~EXTI_LINE_10_MASK;
 
     /* 7. Enable EXTI15_10 Interrupt in NVIC */
@@ -68,24 +68,24 @@ void bsp_gpio_init(void)
 }
 
 /* Key State Readers (Active-Low: Pressed = true) */
-bool bsp_gpio_read_key1_do(void)
+bool bsp_gpio_read_key1(void)
 {
-    return ((GPIOA->IDR & (1UL << KEY1_DO_PIN)) == 0U);
+    return ((GPIOA->IDR & (1UL << KEY1_PIN)) == 0U);
 }
 
-bool bsp_gpio_read_key2_re(void)
+bool bsp_gpio_read_key2(void)
 {
-    return ((GPIOB->IDR & (1UL << KEY2_RE_PIN)) == 0U);
+    return ((GPIOB->IDR & (1UL << KEY2_PIN)) == 0U);
 }
 
-bool bsp_gpio_read_key3_mi(void)
+bool bsp_gpio_read_key3(void)
 {
-    return ((GPIOB->IDR & (1UL << KEY3_MI_PIN)) == 0U);
+    return ((GPIOB->IDR & (1UL << KEY3_PIN)) == 0U);
 }
 
-bool bsp_gpio_read_key4_sol(void)
+bool bsp_gpio_read_key4(void)
 {
-    return ((GPIOB->IDR & (1UL << KEY4_SOL_PIN)) == 0U);
+    return ((GPIOB->IDR & (1UL << KEY4_PIN)) == 0U);
 }
 
 bool bsp_gpio_read_joystick_switch(void)
@@ -96,7 +96,7 @@ bool bsp_gpio_read_joystick_switch(void)
 /* Red LED Setter */
 void bsp_gpio_led_red_set(bool state)
 {
-    if (state)
+    if (state == true)
     {
         GPIOA->ODR |= (1UL << LED_RED_PIN);
     }

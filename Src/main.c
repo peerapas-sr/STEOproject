@@ -51,7 +51,7 @@ int main(void)
     app_synth_run();
 
     /* Should never reach here */
-    while (1)
+    while (1 != 0)
     {
         /* Infinite loop for safety */
     }
